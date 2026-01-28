@@ -1,0 +1,1190 @@
+print('^2[IT-DRUGS DEBUG]^7 cl_zones.lua iniciando...')
+drugZones = drugZones or {}
+drugTables = drugTables or {}
+local zoneObjects = {}
+tableObjects = tableObjects or {}
+currentEditingZone = currentEditingZone or nil
+
+-- Variáveis de debug
+local debugMode = false
+local debugWasEnabled = false -- Rastrear se debug estava ativo antes de ativar temporariamente
+
+-- Função para log de debug (definida antes de ser usada)
+local function DebugLog(message, level)
+    if not debugMode or not Config.ZoneDebug.showLogs then
+        return
+    end
+    
+    level = level or "INFO"
+    local prefix = "^3[IT-DRUGS DEBUG]^7"
+    
+    if level == "ERROR" then
+        prefix = "^1[IT-DRUGS DEBUG ERROR]^7"
+    elseif level == "WARN" then
+        prefix = "^3[IT-DRUGS DEBUG WARN]^7"
+    elseif level == "SUCCESS" then
+        prefix = "^2[IT-DRUGS DEBUG SUCCESS]^7"
+    end
+    
+    print(string.format("%s %s", prefix, message))
+end
+
+-- Função para desenhar texto 3D
+local function DrawText3D(x, y, z, text)
+    local onScreen, _x, _y = World3dToScreen2d(x, y, z)
+    local camCoords = GetGameplayCamCoord()
+    local distance = #(camCoords - vector3(x, y, z))
+    
+    local scale = (1 / distance) * 2
+    local fov = (1 / GetGameplayCamFov()) * 100
+    scale = scale * fov
+    
+    if onScreen then
+        SetTextScale(0.0 * scale, 0.55 * scale)
+        SetTextFont(0)
+        SetTextProportional(1)
+        SetTextColour(255, 255, 255, 215)
+        SetTextDropshadow(0, 0, 0, 0, 255)
+        SetTextEdge(2, 0, 0, 0, 150)
+        SetTextDropShadow()
+        SetTextOutline()
+        SetTextEntry("STRING")
+        SetTextCentre(1)
+        AddTextComponentString(text)
+        DrawText(_x, _y)
+    end
+end
+
+-- Carregar zonas do servidor
+local function loadZones()
+    drugZones, drugTables = lib.callback.await('it-drugs:server:getZones', false)
+    
+    if debugMode then
+        local zoneCount = 0
+        local tableCount = 0
+        for _ in pairs(drugZones) do zoneCount = zoneCount + 1 end
+        for _, tables in pairs(drugTables) do
+            tableCount = tableCount + #tables
+        end
+        DebugLog(string.format("Zonas carregadas: %d | Mesas carregadas: %d", zoneCount, tableCount), "SUCCESS")
+    end
+    
+    -- Limpar zonas antigas
+    for _, zoneObj in pairs(zoneObjects) do
+        if zoneObj.remove then
+            zoneObj:remove()
+        end
+    end
+    zoneObjects = {}
+    
+    -- Limpar todas as mesas antigas antes de recriar
+    for tableId, tableData in pairs(tableObjects) do
+        if tableData.object and DoesEntityExist(tableData.object) then
+            DeleteEntity(tableData.object)
+        end
+    end
+    tableObjects = {}
+    
+    -- Criar zonas
+    for zoneId, zone in pairs(drugZones) do
+        if zone.polygon_points and #zone.polygon_points >= 3 then
+            local coords = {}
+            for _, point in ipairs(zone.polygon_points) do
+                table.insert(coords, vector3(point.x, point.y, point.z))
+            end
+            
+            zoneObjects[zoneId] = lib.zones.poly({
+                points = coords,
+                thickness = zone.thickness or 10.0,
+                debug = Config.DebugPoly,
+                onEnter = function(self)
+                    if Config.Debug then print("Entered Drug Zone ["..zoneId.."]") end
+                    currentEditingZone = zoneId
+                    -- Sempre criar target para zonas dinâmicas
+                    if Config.EnableSelling then
+                        CreateSellTarget()
+                    end
+                end,
+                onExit = function(self)
+                    if Config.Debug then print("Exited Drug Zone ["..zoneId.."]") end
+                    currentEditingZone = nil
+                    -- Desativar sistema de venda
+                    if Config.EnableSelling then
+                        RemoveSellTarget()
+                    end
+                end
+            })
+        end
+    end
+    
+    -- Criar mesas
+    for zoneId, tables in pairs(drugTables) do
+        for _, tableData in ipairs(tables) do
+            if tableData.coords then
+                local coords = vector4(tableData.coords.x, tableData.coords.y, tableData.coords.z, tableData.coords.heading or 0.0)
+                spawnDrugTable(tableData.table_id, coords, tableData.model or 'bkr_prop_weed_table_01a', zoneId)
+            end
+        end
+    end
+end
+
+-- Spawnar mesa de drogas (tornar global)
+function spawnDrugTable(tableId, coords, model, zoneId)
+    -- Verificar se a mesa já existe e remover antes de criar nova
+    if tableObjects[tableId] then
+        if DoesEntityExist(tableObjects[tableId].object) then
+            DeleteEntity(tableObjects[tableId].object)
+        end
+        tableObjects[tableId] = nil
+    end
+    
+    local modelHash = GetHashKey(model)
+    
+    RequestModel(modelHash)
+    while not HasModelLoaded(modelHash) do
+        Wait(100)
+    end
+    
+    local tableObj = CreateObject(modelHash, coords.x, coords.y, coords.z, false, false, false)
+    SetEntityHeading(tableObj, coords.w)
+    FreezeEntityPosition(tableObj, true)
+    SetEntityAsMissionEntity(tableObj, true, true)
+    
+    tableObjects[tableId] = {
+        object = tableObj,
+        coords = coords,
+        zoneId = zoneId
+    }
+    
+    SetModelAsNoLongerNeeded(modelHash)
+end
+
+-- Remover mesa
+local function removeDrugTable(tableId)
+    if tableObjects[tableId] then
+        if DoesEntityExist(tableObjects[tableId].object) then
+            DeleteEntity(tableObjects[tableId].object)
+        end
+        tableObjects[tableId] = nil
+    end
+end
+
+-- Evento para iniciar criação de zona
+RegisterNetEvent('it-drugs:client:startZoneCreation', function(data)
+    -- Buscar gangs disponíveis ANTES de mostrar o diálogo
+    local gangs = lib.callback.await('it-drugs:server:getAllGangs', false)
+    
+    -- Debug: verificar se gangs foram carregadas
+    if Config.Debug then
+        print("^3[IT-DRUGS DEBUG]^7 Gangs carregadas: " .. tostring(#gangs or 0))
+        if gangs then
+            for i, gang in ipairs(gangs) do
+                print("^3[IT-DRUGS DEBUG]^7 Gang " .. i .. ": " .. tostring(gang.name) .. " - " .. tostring(gang.label))
+            end
+        end
+    end
+    
+    -- Preparar opções de seleção de gang (usar string vazia ao invés de nil)
+    local gangOptions = {}
+    table.insert(gangOptions, {value = '', label = 'Nenhum (Público)'})
+    
+    if gangs and #gangs > 0 then
+        for _, gang in ipairs(gangs) do
+            if gang and gang.name then
+                table.insert(gangOptions, {
+                    value = gang.name,
+                    label = gang.label or gang.name
+                })
+            end
+        end
+    end
+    
+    -- Debug: verificar opções preparadas
+    if Config.Debug then
+        print("^3[IT-DRUGS DEBUG]^7 Opções de gang preparadas: " .. tostring(#gangOptions))
+    end
+    
+    -- Se o player tem gang, adicionar como padrão
+    -- Se for admin, pode escolher qualquer grupo (default será '' para permitir escolha livre)
+    local playerGang = it.getPlayerGang()
+    local defaultGang = ''
+    if not data.canChooseAnyGang then
+        -- Se não for admin, usar a gang do player como padrão
+        if playerGang and playerGang.name then
+            defaultGang = playerGang.name
+        elseif data.gangName then
+            defaultGang = data.gangName
+        end
+    end
+    -- Se for admin (canChooseAnyGang = true), defaultGang fica '' para permitir escolha livre
+    
+    -- Verificar se há opções de gang antes de mostrar o diálogo
+    if #gangOptions == 0 then
+        lib.notify({ type = 'error', description = 'Erro: Nenhuma gang encontrada!' })
+        return
+    end
+    
+    -- Mostrar diálogo com seleção de grupo logo no início (ANTES de iniciar o criador)
+    local input = lib.inputDialog('Criar Zona de Drogas', {
+        {type = 'input', label = 'Nome da Zona', required = true, placeholder = 'Ex: Zona Ballas'},
+        {type = 'select', label = 'Gang/Grupo', required = false, options = gangOptions, default = defaultGang or gangOptions[1].value},
+        {type = 'number', label = 'Altura (Thickness)', required = true, default = 10.0, min = 1.0, max = 50.0}
+    })
+    
+    if not input then 
+        -- Se cancelou o diálogo, não fazer nada
+        return 
+    end
+    
+    -- Ativar debug temporariamente para criação/edição de zonas (após confirmar o diálogo)
+    debugWasEnabled = debugMode
+    if not debugMode then
+        debugMode = true
+        if Config.ZoneDebug.showLogs then
+            DebugLog("Debug ativado automaticamente para criação/edição de zona", "INFO")
+        end
+    end
+    
+    local zoneName = input[1]
+    local selectedGang = input[2] -- Pode ser '' (string vazia) para zona pública
+    local thickness = input[3] or 10.0
+    
+    -- Converter string vazia para nil
+    if selectedGang == '' then
+        selectedGang = nil
+    end
+    
+    -- Iniciar criador de zona
+    ZoneCreator.startCreator({
+        thickness = thickness,
+        onCreated = function(zoneData)
+            -- Salvar zona no servidor
+            -- Gerar ID único usando GetGameTimer (disponível no cliente)
+            local uniqueId = 'drug_zone_' .. GetGameTimer() .. '_' .. math.random(1000, 9999)
+            if debugMode then
+                DebugLog(string.format("Salvando nova zona: %s (ID: %s)", zoneName, uniqueId), "INFO")
+            end
+            TriggerServerEvent('it-drugs:server:saveZone', {
+                zoneId = uniqueId,
+                label = zoneName,
+                gangName = selectedGang,
+                points = zoneData.points,
+                thickness = zoneData.thickness,
+                drugs = nil -- Usar drogas padrão
+            })
+            
+            -- Restaurar estado do debug se foi ativado temporariamente
+            if not debugWasEnabled then
+                debugMode = false
+                if Config.ZoneDebug.showLogs then
+                    DebugLog("Debug desativado após criação de zona", "INFO")
+                end
+            end
+        end,
+        onCanceled = function()
+            -- Restaurar estado do debug se foi ativado temporariamente
+            if not debugWasEnabled then
+                debugMode = false
+                if Config.ZoneDebug.showLogs then
+                    DebugLog("Debug desativado após cancelar criação de zona", "INFO")
+                end
+            end
+        end
+    })
+end)
+
+-- Função para limpar props órfãos (mesas sem ID válido)
+local function cleanupOrphanTables()
+    local validTableIds = {}
+    
+    -- Coletar todos os IDs válidos de mesas
+    if drugTables then
+        for zoneId, tables in pairs(drugTables) do
+            for _, tableData in ipairs(tables) do
+                if tableData.table_id then
+                    validTableIds[tableData.table_id] = true
+                end
+            end
+        end
+    end
+    
+    -- Deletar props que não têm ID válido
+    for tableId, tableData in pairs(tableObjects) do
+        if not validTableIds[tableId] then
+            if tableData.object and DoesEntityExist(tableData.object) then
+                DeleteEntity(tableData.object)
+            end
+            tableObjects[tableId] = nil
+        end
+    end
+    
+    -- Limpar objetos órfãos no mundo próximos às zonas (mesas que não estão na lista)
+    -- Isso é mais seguro do que limpar todas as mesas do mundo
+    if drugZones then
+        for zoneId, zone in pairs(drugZones) do
+            if zone.polygon_points and #zone.polygon_points >= 3 then
+                -- Calcular centro da zona
+                local centerX, centerY, centerZ = 0, 0, 0
+                for _, point in ipairs(zone.polygon_points) do
+                    centerX = centerX + point.x
+                    centerY = centerY + point.y
+                    centerZ = centerZ + point.z
+                end
+                centerX = centerX / #zone.polygon_points
+                centerY = centerY / #zone.polygon_points
+                centerZ = centerZ / #zone.polygon_points
+                
+                local modelHash = GetHashKey('bkr_prop_weed_table_01a')
+                local objects = GetGamePool('CObject')
+                
+                for _, obj in ipairs(objects) do
+                    if DoesEntityExist(obj) then
+                        local objModel = GetEntityModel(obj)
+                        if objModel == modelHash then
+                            local objCoords = GetEntityCoords(obj)
+                            local dist = #(vector3(centerX, centerY, centerZ) - objCoords)
+                            
+                            -- Se estiver dentro de 100m da zona e não estiver sendo gerenciado
+                            if dist < 100.0 then
+                                local isManaged = false
+                                for _, tableData in pairs(tableObjects) do
+                                    if tableData.object == obj then
+                                        isManaged = true
+                                        break
+                                    end
+                                end
+                                if not isManaged then
+                                    DeleteEntity(obj)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- Evento para atualizar zonas (atualização ao vivo)
+-- Evento para receber alerta de gang
+RegisterNetEvent('it-drugs:client:gangAlert', function(alertData)
+    if alertData and alertData.message then
+        it.notify(alertData.message, 'error')
+        
+        -- Opcional: Criar waypoint no mapa
+        if alertData.coords then
+            SetNewWaypoint(alertData.coords.x, alertData.coords.y)
+        end
+    end
+end)
+
+RegisterNetEvent('it-drugs:client:zonesUpdated', function(zones, tables)
+    -- Atualizar dados imediatamente
+    if zones then drugZones = zones end
+    if tables then drugTables = tables end
+    
+    -- Salvar zona atual antes de recarregar
+    local wasInZone = currentEditingZone
+    
+    -- Recarregar zonas (isso vai recriar as zonas e mesas)
+    loadZones()
+    
+    -- Se estava em uma zona que foi deletada, remover o target de venda
+    if wasInZone and not drugZones[wasInZone] then
+        currentEditingZone = nil
+        if Config.EnableSelling then
+            RemoveSellTarget()
+        end
+    end
+    
+    -- Se ainda está em uma zona válida, garantir que o target está ativo
+    if currentEditingZone and drugZones[currentEditingZone] then
+        if Config.EnableSelling then
+            CreateSellTarget()
+        end
+    end
+    
+    Wait(500) -- Aguardar um pouco
+    cleanupOrphanTables() -- Limpar props órfãos após atualizar
+end)
+
+-- Variável para mesa sendo posicionada
+local positioningTable = nil
+local positioningTableObj = nil
+
+-- Função para verificar se coordenadas estão dentro de uma zona
+local function isPointInZone(point, zone)
+    if not zone.polygon_points or #zone.polygon_points < 3 then return false end
+    
+    local x, y, z = point.x, point.y, point.z
+    local inside = false
+    local j = #zone.polygon_points
+    
+    for i = 1, #zone.polygon_points do
+        local pi = zone.polygon_points[i]
+        local pj = zone.polygon_points[j]
+        
+        if ((pi.y > y) ~= (pj.y > y)) and (x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x) then
+            inside = not inside
+        end
+        j = i
+    end
+    
+    -- Verificar altura (mais flexível para zonas em prédios)
+    if inside then
+        local thickness = zone.thickness or 10.0
+        local minZ = math.huge
+        local maxZ = -math.huge
+        
+        -- Encontrar min e max Z dos pontos do polígono
+        for i = 1, #zone.polygon_points do
+            local pz = zone.polygon_points[i].z
+            if pz < minZ then minZ = pz end
+            if pz > maxZ then maxZ = pz end
+        end
+        
+        -- Aplicar thickness a partir do minZ e maxZ
+        local zoneMinZ = minZ
+        local zoneMaxZ = maxZ + thickness
+        
+        -- Verificar se o ponto está dentro da faixa de altura
+        -- Permitir uma margem de erro de 2m para cima e para baixo
+        inside = z >= (zoneMinZ - 2.0) and z <= (zoneMaxZ + 2.0)
+    end
+    
+    return inside
+end
+
+-- Comando removido - usar painel (/drugzone)
+
+-- Função para posicionar mesa (usada pelo painel)
+local function positionTable(zoneId, tableId, model, currentCoords)
+    -- Ativar debug temporariamente para posicionamento de mesa
+    debugWasEnabled = debugMode
+    if not debugMode then
+        debugMode = true
+        if Config.ZoneDebug.showLogs then
+            DebugLog("Debug ativado automaticamente para posicionamento de mesa", "INFO")
+        end
+    end
+    
+    local modelHash = GetHashKey(model or 'bkr_prop_weed_table_01a')
+    RequestModel(modelHash)
+    while not HasModelLoaded(modelHash) do
+        Wait(100)
+    end
+    
+    local tempTable = CreateObject(modelHash, currentCoords.x, currentCoords.y, currentCoords.z, false, false, false)
+    SetEntityHeading(tempTable, currentCoords.w or 0.0)
+    SetEntityAlpha(tempTable, 200, false)
+    SetEntityCollision(tempTable, false, false)
+    FreezeEntityPosition(tempTable, false)
+    
+    positioningTable = {
+        zoneId = zoneId,
+        model = model or 'bkr_prop_weed_table_01a',
+        tableId = tableId,
+        coords = {x = currentCoords.x, y = currentCoords.y, z = currentCoords.z, heading = currentCoords.w or 0.0}
+    }
+    positioningTableObj = tempTable
+    
+    lib.notify({ 
+        type = 'info', 
+        description = 'Posicionando mesa! Use [WASD] para mover, [Q/E] para rotacionar, [Shift/Ctrl] para subir/descer, [Enter] para confirmar, [X] para cancelar' 
+    })
+    
+    CreateThread(function()
+        local moveSpeed = 0.1
+        local rotSpeed = 2.0
+        local editZoneId = zoneId
+        
+        while positioningTableObj and DoesEntityExist(positioningTableObj) do
+            Wait(0)
+            
+            DisableControlAction(0, 30, true)
+            DisableControlAction(0, 31, true)
+            DisableControlAction(0, 32, true)
+            DisableControlAction(0, 33, true)
+            
+            local currentCoords = GetEntityCoords(positioningTableObj)
+            local currentHeading = GetEntityHeading(positioningTableObj)
+            local newCoords = currentCoords
+            local newHeading = currentHeading
+            
+            if IsControlPressed(0, 32) then
+                newCoords = newCoords + vector3(0.0, moveSpeed, 0.0)
+            elseif IsControlPressed(0, 33) then
+                newCoords = newCoords + vector3(0.0, -moveSpeed, 0.0)
+            end
+            
+            if IsControlPressed(0, 34) then
+                newCoords = newCoords + vector3(-moveSpeed, 0.0, 0.0)
+            elseif IsControlPressed(0, 35) then
+                newCoords = newCoords + vector3(moveSpeed, 0.0, 0.0)
+            end
+            
+            if IsControlPressed(0, 21) then
+                newCoords = newCoords + vector3(0.0, 0.0, moveSpeed)
+            elseif IsControlPressed(0, 36) then
+                newCoords = newCoords + vector3(0.0, 0.0, -moveSpeed)
+            end
+            
+            if IsControlPressed(0, 44) then
+                newHeading = newHeading - rotSpeed
+            elseif IsControlPressed(0, 38) then
+                newHeading = newHeading + rotSpeed
+            end
+            
+            local found, groundZ = GetGroundZFor_3dCoord(newCoords.x, newCoords.y, newCoords.z, false)
+            if found then
+                newCoords = vector3(newCoords.x, newCoords.y, groundZ)
+            end
+            
+            SetEntityCoords(positioningTableObj, newCoords.x, newCoords.y, newCoords.z, false, false, false, true)
+            SetEntityHeading(positioningTableObj, newHeading)
+            
+            local zone = drugZones[editZoneId]
+            local inZone = false
+            if zone then
+                inZone = isPointInZone(newCoords, zone)
+            end
+            
+            local onScreen, screenX, screenY = World3dToScreen2d(newCoords.x, newCoords.y, newCoords.z + 1.0)
+            if onScreen then
+                DrawText3D(newCoords.x, newCoords.y, newCoords.z + 1.0, 
+                    inZone and "~g~Dentro da Zona~w~\n[Enter] Confirmar | [X] Cancelar" or 
+                    "~r~Fora da Zona~w~\n[Enter] Confirmar | [X] Cancelar")
+            end
+            
+            if IsControlJustPressed(0, 191) then
+                if inZone then
+                    positioningTable.coords = {
+                        x = newCoords.x,
+                        y = newCoords.y,
+                        z = newCoords.z,
+                        heading = newHeading
+                    }
+                    
+                    -- Remover mesa antiga se estiver editando
+                    if tableId and tableObjects[tableId] then
+                        if DoesEntityExist(tableObjects[tableId].object) then
+                            DeleteEntity(tableObjects[tableId].object)
+                        end
+                        tableObjects[tableId] = nil
+                    end
+                    
+                    if tableId then
+                        if debugMode then
+                            DebugLog(string.format("Atualizando mesa ID: %s na zona: %s", tableId, zoneId), "INFO")
+                        end
+                        TriggerServerEvent('it-drugs:server:updateDrugTable', {
+                            tableId = tableId,
+                            coords = positioningTable.coords
+                        })
+                    else
+                        if debugMode then
+                            DebugLog(string.format("Salvando nova mesa na zona: %s", zoneId), "INFO")
+                        end
+                        TriggerServerEvent('it-drugs:server:saveDrugTable', {
+                            zoneId = zoneId,
+                            coords = positioningTable.coords,
+                            model = positioningTable.model
+                        })
+                    end
+                    
+                    DeleteEntity(positioningTableObj)
+                    positioningTable = nil
+                    positioningTableObj = nil
+                    lib.notify({ type = 'success', description = 'Mesa salva com sucesso!' })
+                    
+                    -- Restaurar estado do debug se foi ativado temporariamente
+                    if not debugWasEnabled then
+                        debugMode = false
+                        if Config.ZoneDebug.showLogs then
+                            DebugLog("Debug desativado após salvar mesa", "INFO")
+                        end
+                    end
+                    break
+                else
+                    lib.notify({ type = 'error', description = 'A mesa precisa estar dentro da zona!' })
+                end
+            end
+            
+            if IsControlJustPressed(0, 73) then
+                DeleteEntity(positioningTableObj)
+                positioningTable = nil
+                positioningTableObj = nil
+                lib.notify({ type = 'info', description = 'Posicionamento cancelado.' })
+                
+                -- Restaurar estado do debug se foi ativado temporariamente
+                if not debugWasEnabled then
+                    debugMode = false
+                    if Config.ZoneDebug.showLogs then
+                        DebugLog("Debug desativado após cancelar posicionamento de mesa", "INFO")
+                    end
+                end
+                
+                if tableId then
+                    loadZones()
+                end
+                break
+            end
+        end
+        
+        SetModelAsNoLongerNeeded(modelHash)
+    end)
+end
+
+-- Função para listar zonas
+local function showZonesList()
+    local options = {}
+    
+    for zoneId, zone in pairs(drugZones) do
+        table.insert(options, {
+            title = zone.label or 'Zona Sem Nome',
+            description = string.format('ID: %s | Gang: %s | Altura: %.1fm', zoneId, zone.gang_name and zone.gang_name ~= '' and zone.gang_name or 'Público', zone.thickness or 10.0),
+            icon = 'map',
+            arrow = true,
+            onSelect = function()
+                lib.registerContext({
+                    id = 'it-drugs-zone-actions',
+                    title = zone.label or 'Zona',
+                    menu = 'it-drugs-zones-list',
+                    options = {
+                        {
+                            title = 'Editar Zona',
+                            description = 'Modificar pontos e configurações',
+                            icon = 'edit',
+                            onSelect = function()
+                                local input = lib.inputDialog('Editar Zona', {
+                                    {type = 'input', label = 'Nome', required = true, default = zone.label or 'Zona de Drogas'},
+                                    {type = 'number', label = 'Altura', required = true, default = zone.thickness or 10.0, min = 1.0, max = 50.0}
+                                })
+                                
+                                if not input then return end
+                                
+                                -- Ativar debug temporariamente para edição de zona
+                                debugWasEnabled = debugMode
+                                if not debugMode then
+                                    debugMode = true
+                                    if Config.ZoneDebug.showLogs then
+                                        DebugLog("Debug ativado automaticamente para edição de zona", "INFO")
+                                    end
+                                end
+                                
+                                ZoneCreator.startCreator({
+                                    thickness = input[2] or 10.0,
+                                    initialPoints = zone.polygon_points,
+                                    onCreated = function(zoneData)
+                                        TriggerServerEvent('it-drugs:server:updateZone', {
+                                            zoneId = zoneId,
+                                            label = input[1],
+                                            points = zoneData.points,
+                                            thickness = zoneData.thickness
+                                        })
+                                        
+                                        -- Restaurar estado do debug se foi ativado temporariamente
+                                        if not debugWasEnabled then
+                                            debugMode = false
+                                            if Config.ZoneDebug.showLogs then
+                                                DebugLog("Debug desativado após editar zona", "INFO")
+                                            end
+                                        end
+                                    end,
+                                    onCanceled = function()
+                                        -- Restaurar estado do debug se foi ativado temporariamente
+                                        if not debugWasEnabled then
+                                            debugMode = false
+                                            if Config.ZoneDebug.showLogs then
+                                                DebugLog("Debug desativado após cancelar edição de zona", "INFO")
+                                            end
+                                        end
+                                    end
+                                })
+                            end
+                        },
+                        {
+                            title = 'Deletar Zona',
+                            description = 'Remover zona permanentemente',
+                            icon = 'trash',
+                            onSelect = function()
+                                local alert = lib.alertDialog({
+                                    header = 'Confirmar Exclusão',
+                                    content = 'Tem certeza que deseja deletar esta zona? Todas as mesas serão removidas também.',
+                                    centered = true,
+                                    cancel = true,
+                                    labels = {
+                                        cancel = 'Cancelar',
+                                        confirm = 'Deletar'
+                                    }
+                                })
+                                
+                                if alert == 'confirm' then
+                                    if debugMode then
+                                        DebugLog(string.format("Deletando zona: %s (ID: %s)", zone.label or "Sem Nome", zoneId), "WARN")
+                                    end
+                                    TriggerServerEvent('it-drugs:server:deleteZone', zoneId)
+                                end
+                            end
+                        }
+                    }
+                })
+                lib.showContext('it-drugs-zone-actions')
+            end
+        })
+    end
+    
+    if #options == 0 then
+        table.insert(options, {
+            title = 'Nenhuma Zona Encontrada',
+            description = 'Crie uma zona primeiro',
+            icon = 'info'
+        })
+    end
+    
+    lib.registerContext({
+        id = 'it-drugs-zones-list',
+        title = 'Lista de Zonas',
+        menu = 'it-drugs-zone-menu',
+        options = options
+    })
+    
+    lib.showContext('it-drugs-zones-list')
+end
+
+-- Função para mostrar menu de mesas
+local function showTableMenu(zoneId)
+    local zone = drugZones[zoneId]
+    if not zone then return end
+    
+    local options = {}
+    
+    -- Adicionar nova mesa
+    table.insert(options, {
+        title = 'Adicionar Mesa',
+        description = 'Adicionar uma nova mesa nesta zona',
+        icon = 'plus',
+        arrow = true,
+        onSelect = function()
+            local ped = PlayerPedId()
+            local coords = GetEntityCoords(ped)
+            local heading = GetEntityHeading(ped)
+            
+            local input = lib.inputDialog('Criar Mesa de Drogas', {
+                {type = 'input', label = 'Modelo da Mesa', required = false, placeholder = 'bkr_prop_weed_table_01a', default = 'bkr_prop_weed_table_01a'}
+            })
+            
+            if not input then return end
+            
+            positionTable(zoneId, nil, input[1] or 'bkr_prop_weed_table_01a', vector4(coords.x, coords.y, coords.z, heading))
+        end
+    })
+    
+    -- Listar mesas existentes
+    if drugTables[zoneId] and #drugTables[zoneId] > 0 then
+        for _, tableData in ipairs(drugTables[zoneId]) do
+            table.insert(options, {
+                title = string.format('Mesa #%s', tableData.table_id),
+                description = string.format('Modelo: %s | Editar ou Deletar', tableData.model or 'bkr_prop_weed_table_01a'),
+                icon = 'table',
+                arrow = true,
+                onSelect = function()
+                    lib.registerContext({
+                        id = 'it-drugs-table-actions',
+                        title = 'Ações da Mesa',
+                        menu = 'it-drugs-table-menu',
+                        options = {
+                            {
+                                title = 'Editar Posição',
+                                description = 'Mover esta mesa para outra posição',
+                                icon = 'edit',
+                                onSelect = function()
+                                    if tableData.coords then
+                                        local coords = vector4(tableData.coords.x, tableData.coords.y, tableData.coords.z, tableData.coords.heading or 0.0)
+                                        positionTable(zoneId, tableData.table_id, tableData.model, coords)
+                                    end
+                                end
+                            },
+                            {
+                                title = 'Deletar Mesa',
+                                description = 'Remover esta mesa permanentemente',
+                                icon = 'trash',
+                                onSelect = function()
+                                    local alert = lib.alertDialog({
+                                        header = 'Confirmar Exclusão',
+                                        content = 'Tem certeza que deseja deletar esta mesa?',
+                                        centered = true,
+                                        cancel = true,
+                                        labels = {
+                                            cancel = 'Cancelar',
+                                            confirm = 'Deletar'
+                                        }
+                                    })
+                                    
+                                    if alert == 'confirm' then
+                                        if debugMode then
+                                            DebugLog(string.format("Deletando mesa ID: %s", tableData.table_id), "WARN")
+                                        end
+                                        TriggerServerEvent('it-drugs:server:deleteDrugTable', tableData.table_id)
+                                    end
+                                end
+                            }
+                        }
+                    })
+                    lib.showContext('it-drugs-table-actions')
+                end
+            })
+        end
+    end
+    
+    lib.registerContext({
+        id = 'it-drugs-table-menu',
+        title = string.format('Mesas - %s', zone.label or 'Zona'),
+        menu = 'it-drugs-zone-menu',
+        options = options
+    })
+    
+    lib.showContext('it-drugs-table-menu')
+end
+
+-- Função para mostrar menu principal de zonas
+local function showZoneMenu()
+    local options = {}
+    
+    -- Opção: Criar Nova Zona
+    table.insert(options, {
+        title = 'Criar Nova Zona',
+        description = 'Criar uma nova zona de drogas',
+        icon = 'plus',
+        arrow = true,
+        onSelect = function()
+            TriggerServerEvent('it-drugs:server:requestZoneCreation')
+        end
+    })
+    
+    -- Opção: Editar Zona Atual (se estiver em uma zona)
+    if currentEditingZone and drugZones[currentEditingZone] then
+        local zone = drugZones[currentEditingZone]
+        table.insert(options, {
+            title = 'Editar Zona Atual',
+            description = string.format('Editar zona: %s', zone.label or 'Sem nome'),
+            icon = 'edit',
+            arrow = true,
+            onSelect = function()
+                local input = lib.inputDialog('Editar Zona de Drogas', {
+                    {type = 'input', label = 'Nome da Zona', required = true, default = zone.label or 'Zona de Drogas'},
+                    {type = 'number', label = 'Altura (Thickness)', required = true, default = zone.thickness or 10.0, min = 1.0, max = 50.0}
+                })
+                
+                if not input then return end
+                
+                -- Ativar debug temporariamente para edição de zona
+                debugWasEnabled = debugMode
+                if not debugMode then
+                    debugMode = true
+                    if Config.ZoneDebug.showLogs then
+                        DebugLog("Debug ativado automaticamente para edição de zona", "INFO")
+                    end
+                end
+                
+                ZoneCreator.startCreator({
+                    thickness = input[2] or 10.0,
+                    initialPoints = zone.polygon_points,
+                    onCreated = function(zoneData)
+                        TriggerServerEvent('it-drugs:server:updateZone', {
+                            zoneId = currentEditingZone,
+                            label = input[1],
+                            points = zoneData.points,
+                            thickness = zoneData.thickness
+                        })
+                        
+                        -- Restaurar estado do debug se foi ativado temporariamente
+                        if not debugWasEnabled then
+                            debugMode = false
+                            if Config.ZoneDebug.showLogs then
+                                DebugLog("Debug desativado após editar zona", "INFO")
+                            end
+                        end
+                    end,
+                    onCanceled = function()
+                        -- Restaurar estado do debug se foi ativado temporariamente
+                        if not debugWasEnabled then
+                            debugMode = false
+                            if Config.ZoneDebug.showLogs then
+                                DebugLog("Debug desativado após cancelar edição de zona", "INFO")
+                            end
+                        end
+                    end
+                })
+            end
+        })
+        
+        -- Opção: Gerenciar Mesas da Zona
+        table.insert(options, {
+            title = 'Gerenciar Mesas',
+            description = 'Adicionar, editar ou remover mesas desta zona',
+            icon = 'table',
+            arrow = true,
+            onSelect = function()
+                showTableMenu(currentEditingZone)
+            end
+        })
+    end
+    
+    -- Opção: Listar Todas as Zonas
+    table.insert(options, {
+        title = 'Listar Zonas',
+        description = 'Ver todas as zonas criadas',
+        icon = 'list',
+        arrow = true,
+        onSelect = function()
+            showZonesList()
+        end
+    })
+    
+    lib.registerContext({
+        id = 'it-drugs-zone-menu',
+        title = 'Gerenciar Zonas de Drogas',
+        options = options
+    })
+    
+    lib.showContext('it-drugs-zone-menu')
+end
+
+
+-- Evento duplicado removido - usando o evento principal na linha 138 que inclui seleção de gang
+
+-- Comando para abrir painel de gerenciamento
+RegisterNetEvent('it-drugs:client:openZoneMenu', function()
+    print('^2[IT-DRUGS DEBUG]^7 Evento it-drugs:client:openZoneMenu recebido')
+    showZoneMenu()
+end)
+
+-- Comandos removidos - usar painel (/drugzone)
+
+-- Limpar props órfãos quando o script iniciar
+AddEventHandler('onResourceStart', function(resource)
+    if resource == GetCurrentResourceName() then
+        Wait(1000) -- Aguardar um pouco para garantir que tudo está carregado
+        cleanupOrphanTables()
+    end
+end)
+
+-- ============================================
+-- SISTEMA DE DEBUG
+-- ============================================
+
+-- Função para desenhar linha 3D
+local function DrawLine3D(x1, y1, z1, x2, y2, z2, r, g, b, a)
+    DrawLine(x1, y1, z1, x2, y2, z2, r, g, b, a)
+end
+
+-- Função para desenhar polígono de zona
+local function DrawZonePolygon(zone, color, isCurrent)
+    if not zone or not zone.polygon_points or #zone.polygon_points < 3 then
+        return
+    end
+    
+    local points = zone.polygon_points
+    local thickness = zone.thickness or 10.0
+    
+    -- Desenhar linhas do polígono (parte inferior)
+    for i = 1, #points do
+        local p1 = points[i]
+        local p2 = points[(i % #points) + 1]
+        
+        -- Linha inferior
+        DrawLine3D(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z, color.r, color.g, color.b, color.a)
+        
+        -- Linha vertical (conectando inferior e superior)
+        DrawLine3D(p1.x, p1.y, p1.z, p1.x, p1.y, p1.z + thickness, color.r, color.g, color.b, color.a)
+        
+        -- Linha superior
+        DrawLine3D(p1.x, p1.y, p1.z + thickness, p2.x, p2.y, p2.z + thickness, color.r, color.g, color.b, color.a)
+    end
+    
+    -- Desenhar pontos dos vértices
+    for i = 1, #points do
+        local p = points[i]
+        local pointSize = Config.ZoneDebug.pointSize or 0.3
+        
+        -- Ponto inferior
+        DrawMarker(1, p.x, p.y, p.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, pointSize, pointSize, pointSize, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
+        
+        -- Ponto superior
+        DrawMarker(1, p.x, p.y, p.z + thickness, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, pointSize, pointSize, pointSize, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
+    end
+    
+    -- Desenhar centro da zona com informações
+    local sumX, sumY, sumZ = 0, 0, 0
+    for _, point in ipairs(points) do
+        sumX = sumX + point.x
+        sumY = sumY + point.y
+        sumZ = sumZ + point.z
+    end
+    local centerX = sumX / #points
+    local centerY = sumY / #points
+    local centerZ = sumZ / #points
+    
+    -- Texto com informações da zona
+    local zoneName = zone.name or "Sem Nome"
+    local zoneGang = zone.gang_name or "Público"
+    local tableCount = 0
+    if drugTables[zone.zone_id] then
+        tableCount = #drugTables[zone.zone_id]
+    end
+    
+    local infoText = string.format("~b~Zona: ~w~%s\n~y~Gang: ~w~%s\n~g~Mesas: ~w~%d", zoneName, zoneGang, tableCount)
+    DrawText3D(centerX, centerY, centerZ + (thickness / 2), infoText)
+end
+
+-- Função para desenhar mesas
+local function DrawTableDebug(tableData, zoneId)
+    if not tableData or not tableData.coords then
+        return
+    end
+    
+    local coords = tableData.coords
+    local color = Config.ZoneDebug.zoneColors.table
+    
+    -- Desenhar marcador na mesa
+    DrawMarker(1, coords.x, coords.y, coords.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
+    
+    -- Texto com ID da mesa
+    DrawText3D(coords.x, coords.y, coords.z + 1.0, string.format("~y~Mesa ID: ~w~%s", tableData.table_id or "N/A"))
+end
+
+-- Thread principal de debug
+CreateThread(function()
+    while true do
+        Wait(0)
+        
+        if debugMode and Config.ZoneDebug.showZones then
+            -- Desenhar todas as zonas
+            for zoneId, zone in pairs(drugZones) do
+                if zone.polygon_points and #zone.polygon_points >= 3 then
+                    local isCurrent = (currentEditingZone == zoneId)
+                    local color = nil
+                    
+                    if isCurrent then
+                        color = Config.ZoneDebug.zoneColors.current
+                    elseif zone.color then
+                        color = zone.color
+                        if not color.a then color.a = 150 end
+                    else
+                        color = (zone.gang_name and Config.ZoneDebug.zoneColors.owned or Config.ZoneDebug.zoneColors.default)
+                    end
+                    
+                    DrawZonePolygon(zone, color, isCurrent)
+                end
+            end
+            
+            -- Desenhar todas as mesas
+            if Config.ZoneDebug.showInfo then
+                for zoneId, tables in pairs(drugTables) do
+                    for _, tableData in ipairs(tables) do
+                        DrawTableDebug(tableData, zoneId)
+                    end
+                end
+            end
+        else
+            Wait(500) -- Reduzir uso de CPU quando debug está desativado
+        end
+    end
+end)
+
+-- Thread para mostrar informações na tela
+CreateThread(function()
+    while true do
+        Wait(1000)
+        
+        if debugMode and Config.ZoneDebug.showInfo then
+            local playerPed = PlayerPedId()
+            local playerCoords = GetEntityCoords(playerPed)
+            
+            -- Encontrar zona atual
+            local currentZoneInfo = nil
+            for zoneId, zone in pairs(drugZones) do
+                if zone.polygon_points and #zone.polygon_points >= 3 then
+                    if isPointInZone(playerCoords, zone) then
+                        currentZoneInfo = {
+                            id = zoneId,
+                            name = zone.name or "Sem Nome",
+                            gang = zone.gang_name or "Público",
+                            thickness = zone.thickness or 10.0,
+                            points = #zone.polygon_points,
+                            tables = drugTables[zoneId] and #drugTables[zoneId] or 0
+                        }
+                        break
+                    end
+                end
+            end
+            
+            -- Mostrar informações no console
+            if currentZoneInfo and Config.ZoneDebug.showLogs then
+                print(string.format("^2[DEBUG ZONA]^7 Zona: %s | Gang: %s | Mesas: %d | Pontos: %d", 
+                    currentZoneInfo.name, currentZoneInfo.gang, currentZoneInfo.tables, currentZoneInfo.points))
+            end
+        else
+            Wait(5000) -- Reduzir uso quando debug está desativado
+        end
+    end
+end)
+
+-- Comando para ativar/desativar debug mode
+RegisterCommand('drugzonedebug', function()
+    debugMode = not debugMode
+    
+    if debugMode then
+        lib.notify({
+            type = 'success',
+            description = 'Modo Debug de Zonas ATIVADO'
+        })
+        DebugLog("Modo Debug ATIVADO", "SUCCESS")
+    else
+        lib.notify({
+            type = 'info',
+            description = 'Modo Debug de Zonas DESATIVADO'
+        })
+        DebugLog("Modo Debug DESATIVADO", "INFO")
+    end
+end, false)
+
+-- Exportar função de debug para outros scripts
+exports('DebugLog', DebugLog)
+exports('IsDebugMode', function() return debugMode end)
+
+-- Inicializar ao carregar
+CreateThread(function()
+    Wait(2000) -- Aguardar o servidor estar pronto
+    loadZones()
+    Wait(1000) -- Aguardar zonas carregarem
+    cleanupOrphanTables() -- Limpar props órfãos após carregar
+    
+    -- Verificar se debug deve estar ativo por padrão
+    if Config.ZoneDebug.enabled then
+        debugMode = true
+        DebugLog("Modo Debug ativado por padrão na config", "INFO")
+    end
+end)
+
+
+-- Global Gang Colors Cache
+GangColors = {}
+
+RegisterNetEvent('it-drugs:client:syncGangColors', function(colors)
+    GangColors = colors
+    -- Trigger refresh if needed
+    -- If zones are blips, update them.
+end)
+
+-- Request on load
+CreateThread(function()
+    TriggerServerEvent('it-drugs:server:requestGangColors')
+end)
+
+-- Export for external use
+exports('getGangColor', function(gangName)
+    if GangColors[gangName] then return GangColors[gangName] end
+    return nil
+end)

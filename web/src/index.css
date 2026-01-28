@@ -1,0 +1,99 @@
+@import "tailwindcss";
+
+@theme {
+    --color-background: #0a0a0f;
+    --color-surface: #13131f; 
+    --color-surface-light: #1c1c2e;
+    
+    --color-primary: #6366f1; /* Indigo */
+    --color-primary-dark: #4f46e5;
+    
+    --color-accent: #8b5cf6; /* Violet */
+    
+    --color-text-main: #ffffff;
+    --color-text-dim: #9ca3af;
+    
+    --radius-xl: 1rem;
+    --radius-2xl: 1.5rem;
+}
+
+@layer utilities {
+    .glass-panel {
+        background: rgba(15, 15, 25, 0.85); /* Slightly darker for readability */
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5);
+    }
+    
+    .glass-header {
+        background: linear-gradient(180deg, rgba(30, 30, 45, 0.95) 0%, rgba(20, 20, 35, 0.9) 100%);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .btn-primary {
+         background: linear-gradient(135deg, #4f46e5 0%, #3730a3 100%);
+         box-shadow: 0 4px 15px rgba(79, 70, 229, 0.4);
+         border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .btn-danger {
+         background: linear-gradient(135deg, #dc2626 0%, #991b1b 100%);
+         box-shadow: 0 4px 15px rgba(220, 38, 38, 0.4);
+         border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .btn-success {
+         background: linear-gradient(135deg, #16a34a 0%, #15803d 100%);
+         box-shadow: 0 4px 15px rgba(22, 163, 74, 0.4);
+         border: 1px solid rgba(255,255,255,0.1);
+    }
+    
+    .text-glow {
+        text-shadow: 0 0 10px rgba(255, 255, 255, 0.5);
+    }
+    
+    .shine-effect {
+        position: relative;
+        overflow: hidden;
+    }
+    .shine-effect::after {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: -100%;
+        width: 50%;
+        height: 100%;
+        background: linear-gradient(to right, transparent, rgba(255,255,255,0.1), transparent);
+        transform: skewX(-20deg);
+        transition: 0.5s;
+    }
+    .shine-effect:hover::after {
+        left: 200%;
+        transition: 0.5s;
+    }
+}
+
+@layer base {
+    body {
+        @apply bg-transparent text-white font-sans antialiased;
+        overflow: hidden;
+    }
+}
+
+.leaflet-container {
+    background: #0a0a0f;
+    font-family: inherit;
+}
+
+.leaflet-tooltip {
+    background: transparent;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+.leaflet-tooltip-left:before,
+.leaflet-tooltip-right:before {
+    display: none;
+}

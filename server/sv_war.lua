@@ -268,10 +268,14 @@ CreateThread(function()
                         if elapsed <= 20 then
                             if dist2d <= 50000.0 then isPlayerInZone = true end
                         else
-                            -- Strict Mode: Must be in Polygon
+                            -- Strict Mode: Must be in Polygon (Physical)
                             if zone.polygon_points and #zone.polygon_points >= 3 then
                                 if isPointInPolygon({x=coords.x, y=coords.y}, zone.polygon_points) then
                                     isPlayerInZone = true
+                                else
+                                    if doDebug then
+                                        print(string.format("[WAR-DEBUG] Point Check Fail: Player(%.2f, %.2f). Poly[1](%.2f, %.2f)", coords.x, coords.y, zone.polygon_points[1].x, zone.polygon_points[1].y))
+                                    end
                                 end
                             else
                                 -- Fallback for point-only zones

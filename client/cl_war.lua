@@ -436,22 +436,56 @@ CreateThread(function()
                 end
             end
             
-            -- 5. NUI Progress Logic (Singleton for Closest War)
+            -- 5. NUI Progress Logic (Global for Participants, Local for Observers)
             local shouldShowNui = false
             
-            if closestWar then
-                local zone = gangZones[closestZoneId]
-                local inPoly = false
-                
-                if zone.polygon_points then
-                     inPoly = isPointInPolygon(coords, zone.polygon_points)
+            -- Check if player is part of the war
+            local playerGang = it.getPlayerGang()
+            local participatingWar = nil
+            
+            if playerGang and playerGang.name ~= 'none' then
+                local pName = string.lower(playerGang.name)
+                for zoneId, war in pairs(activeWars) do
+                    local att = string.lower(war.attacker or "")
+                    local def = string.lower(war.defender or "")
+                    
+                    if att == pName or def == pName then
+                        participatingWar = war
+                        closestZoneId = zoneId
+                        break
+                    end
                 end
-                
-                -- Safety Fallback: Always show if within 50m of flag
-                if closestDist < 50.0 then inPoly = true end
+            end
+            
+            if participatingWar then
+                -- Player IS involved -> Global Visibility
+                closestWar = participatingWar
+                shouldShowNui = true
+            else
+                -- Player NOT involved -> Local Visibility (Inside Zone)
+                if not closestWar then
+                    for zoneId, war in pairs(activeWars) do
+                        local zone = gangZones[zoneId]
+                        if zone and zone.polygon_points then
+                            if isPointInPolygon(coords, zone.polygon_points) then
+                                closestWar = war
+                                closestZoneId = zoneId
+                                shouldShowNui = true
+                                break
+                            end
+                        end
+                    end
+                else
+                     -- already found close war via distance check earlier, verify poly
+                     local zone = gangZones[closestZoneId]
+                     if zone and zone.polygon_points and isPointInPolygon(coords, zone.polygon_points) then
+                        shouldShowNui = true
+                     end
+                     if closestDist < 50.0 then shouldShowNui = true end -- Safety fallback
+                end
+            end
 
-                if inPoly then
-                    shouldShowNui = true
+            if shouldShowNui and closestWar then
                     -- Time-based throttling (200ms) to prevent flickering
                     if GetGameTimer() - lastNuiUpdate > 200 then
                         SendNUIMessage({
@@ -471,7 +505,7 @@ CreateThread(function()
                     end
                     isInsideWar = true
                 end
-            end
+
             
             -- Explicit Hide if not valid
             if not shouldShowNui and isInsideWar then

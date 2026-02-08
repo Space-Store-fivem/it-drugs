@@ -37,7 +37,16 @@ interface AppState {
         subMessage?: string;
         type: 'warning' | 'error' | 'info';
         endTime?: number;
+
     };
+
+    // Visual Editor State
+    isVisualEditorOpen: boolean;
+    visualEditorMode: 'create' | 'edit';
+    pendingZoneData: any;
+    editingZoneId: string | null;
+
+    setVisualEditorOpen: (open: boolean, mode?: 'create' | 'edit', data?: any) => void;
 
     setOpen: (open: boolean) => void;
     setTab: (tab: 'map' | 'wars' | 'admin') => void;
@@ -73,6 +82,11 @@ export const useAppStore = create<AppState>((set) => ({
     warAlert: undefined,
     upgradesConfig: {},
 
+    isVisualEditorOpen: false,
+    visualEditorMode: 'create',
+    pendingZoneData: null,
+    editingZoneId: null,
+
     setOpen: (open) => set({ open }),
     setTab: (tab) => set({ tab }),
     setGangName: (gangName) => set({ gangName }),
@@ -84,6 +98,14 @@ export const useAppStore = create<AppState>((set) => ({
     setWarRequests: (warRequests) => set({ warRequests }), // Added setter implementation
     showWarAlert: (warAlert) => set({ warAlert }),
     hideWarAlert: () => set({ warAlert: undefined }),
+
+    setVisualEditorOpen: (isVisualEditorOpen: boolean, mode: 'create' | 'edit' = 'create', data: any = null) => set({
+        isVisualEditorOpen,
+        visualEditorMode: mode,
+        pendingZoneData: data,
+        // If mode is edit, data likely contains zoneId or we set it separately
+        editingZoneId: mode === 'edit' && data ? data.zoneId : null
+    }),
 
     receiveNuiMessage: (data) => {
         if (data.action === 'open') {
@@ -107,14 +129,21 @@ export const useAppStore = create<AppState>((set) => ({
             set({ activeWars: data.wars || {} });
         } else if (data.action === 'warRequestsUpdate') {
             set({ warRequests: data.requests || [] });
-        } else if (data.action === 'captureUpdate') {
-            set({ captureState: data.state });
         } else if (data.action === 'warAlert') {
             if (data.alert) {
                 set({ warAlert: data.alert });
             } else {
                 set({ warAlert: undefined });
             }
+        } else if (data.action === 'enableVisualEditor') {
+            set({
+                open: true,
+                isVisualEditorOpen: true,
+                visualEditorMode: 'create',
+                pendingZoneData: data.data
+            });
+        } else if (data.action === 'captureUpdate') {
+            set({ captureState: data.state });
         }
     }
 }));

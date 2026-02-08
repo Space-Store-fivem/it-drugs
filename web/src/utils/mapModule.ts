@@ -1,9 +1,9 @@
 // SACRED VALUES - DO NOT TOUCH
 const WORLD_SIZE = 16384.0;
 const HALF_WORLD = WORLD_SIZE / 2;
-const MAP_SIZE = 8192;
-const OFFSET_X = -523;
-const OFFSET_Y = -2214;
+const MAP_SIZE = 9550;
+const OFFSET_X = -1950;
+const OFFSET_Y = -1550;
 
 declare const L: any;
 
@@ -59,6 +59,10 @@ function gtaToMap(x: number, y: number): [number, number] {
 
 let map: any = null;
 let mapLayers: any[] = [];
+let editorLayers: any[] = [];
+let editorCircle: any = null; // Used for the Polygon layer
+let editorData: any = {};
+
 
 export const MapModule = {
     initMap: () => {
@@ -110,11 +114,16 @@ export const MapModule = {
         const zonesArray = Array.isArray(zones) ? zones : Object.values(zones);
 
         zonesArray.forEach((zone: any) => {
-            if (zone.polygon_points && zone.polygon_points.length >= 3) {
-                const latlngs = zone.polygon_points.map((p: any) => gtaToMap(p.x, p.y));
+            let latlngs: any[] = [];
 
-                // COLOR LOGIC: User priority -> "admin na hora de criar decide a cor"
-                // Expecting zone.color from backend. Fallback to gang logic.
+            // Prefer Visual Zone (Map Coords) if available, otherwise convert PolyZone (GTA Coords)
+            if (zone.visual_zone && zone.visual_zone.points && zone.visual_zone.points.length >= 3) {
+                latlngs = zone.visual_zone.points.map((p: any) => [p.x, p.y]);
+            } else if (zone.polygon_points && zone.polygon_points.length >= 3) {
+                latlngs = zone.polygon_points.map((p: any) => gtaToMap(p.x, p.y));
+            }
+
+            if (latlngs.length >= 3) {
                 const resolveColor = (c: any) => {
                     if (!c) return null;
                     if (typeof c === 'string') return c;
@@ -176,7 +185,144 @@ export const MapModule = {
             map.remove();
             map = null;
             mapLayers = [];
+            editorLayers = [];
+            editorCircle = null;
             console.log("MapModule destroyed");
         }
+    },
+
+    // VISUAL EDITOR METHODS
+    enableVisualEditor: (data: any, existingVisual?: any) => {
+        if (!map) return;
+
+        // Clear normal layers to focus on editing
+        mapLayers.forEach(layer => map.removeLayer(layer));
+        editorLayers.forEach(layer => map.removeLayer(layer));
+        editorLayers = [];
+        editorCircle = null;
+
+        // 1. Draw "Ghost" PolyZone (Gameplay Area) - Static, dashed
+        if (data.polyPoints && data.polyPoints.length >= 3) {
+            const latlngs = data.polyPoints.map((p: any) => gtaToMap(p.x, p.y));
+            const poly = L.polygon(latlngs, {
+                color: '#ffffff',
+                weight: 1,
+                dashArray: '5, 10',
+                fill: false,
+                opacity: 0.3
+            }).addTo(map);
+            editorLayers.push(poly);
+        }
+
+        // 2. Determine Initial Points for Visual Polygon
+        let pointsToDraw: L.LatLngExpression[] = [];
+        let centroid: L.LatLng;
+
+        if (existingVisual && existingVisual.type === 'polygon' && existingVisual.points) {
+            // Load existing visual polygon (Saved as Map Coordinates {x: lat, y: lng})
+            pointsToDraw = existingVisual.points.map((p: any) => [p.x, p.y]);
+
+        } else if (data.polyPoints) {
+            // Default to Poly coordinates (converted to Map)
+            pointsToDraw = data.polyPoints.map((p: any) => gtaToMap(p.x, p.y));
+        }
+
+        // Calculate Centroid
+        if (pointsToDraw.length > 0) {
+            let sumLat = 0;
+            let sumLng = 0;
+            pointsToDraw.forEach((p: any) => {
+                sumLat += p[0];
+                sumLng += p[1];
+            });
+            centroid = L.latLng(sumLat / pointsToDraw.length, sumLng / pointsToDraw.length);
+        } else {
+            return;
+        }
+
+        // Center map
+        map.setView(centroid, 5);
+
+        // Store original relative positions for scaling
+        editorData = {
+            centroid: centroid,
+            originalPoints: pointsToDraw.map((p: any) => {
+                const pt = L.latLng(p[0], p[1]);
+                return {
+                    latDiff: pt.lat - centroid.lat,
+                    lngDiff: pt.lng - centroid.lng
+                };
+            }),
+            scale: 1.0,
+            color: data.color || '#2ecc71'
+        };
+
+        // 3. Draggable Center Marker
+        const markerIcon = L.divIcon({
+            className: 'custom-editor-marker',
+            html: `<div style="width: 14px; height: 14px; background: white; border: 3px solid ${data.color || '#2ecc71'}; border-radius: 50%; box-shadow: 0 0 10px rgba(0,0,0,0.5); cursor: move;"></div>`,
+            iconSize: [14, 14],
+            iconAnchor: [7, 7]
+        });
+
+        const editorMarker = L.marker(centroid, {
+            draggable: true,
+            icon: markerIcon
+        }).addTo(map);
+
+        editorMarker.on('drag', (e: any) => {
+            const newCentroid = e.target.getLatLng();
+            editorData.centroid = newCentroid;
+            MapModule.redrawVisualPolygon();
+        });
+
+        editorLayers.push(editorMarker);
+
+        // Initial Draw
+        MapModule.redrawVisualPolygon();
+    },
+
+    redrawVisualPolygon: () => {
+        // Remove old polygon if exists
+        if (editorCircle) {
+            map.removeLayer(editorCircle);
+        }
+
+        const { centroid, originalPoints, scale, color } = editorData;
+
+        // Calculate new points based on Centroid + (Relative * Scale)
+        const newPoints = originalPoints.map((offset: any) => [
+            centroid.lat + (offset.latDiff * scale),
+            centroid.lng + (offset.lngDiff * scale)
+        ]);
+
+        editorCircle = L.polygon(newPoints, {
+            color: color,
+            fillColor: color,
+            fillOpacity: 0.4,
+            weight: 3
+        }).addTo(map);
+
+        editorLayers.push(editorCircle);
+    },
+
+    updateEditorScale: (scale: number) => {
+        if (!editorData.originalPoints) return;
+        editorData.scale = scale;
+        MapModule.redrawVisualPolygon();
+    },
+
+    getEditorData: () => {
+        if (!editorCircle) return null;
+
+        // Get final points from the drawn polygon
+        const latlngs = (editorCircle as L.Polygon).getLatLngs()[0] as L.LatLng[];
+
+        // Save as Map Coords { x: lat, y: lng }
+        // This makes loading easy (just pass back to Leaflet)
+        return {
+            type: 'polygon',
+            points: latlngs.map(p => ({ x: p.lat, y: p.lng }))
+        };
     }
 };

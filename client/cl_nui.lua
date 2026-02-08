@@ -16,7 +16,7 @@ end)
 RegisterNUICallback('startCreator', function(data, cb)
     local gangId = data.gangId
     local label = data.label
-    local color = data.color -- FASE 1: Recebe cor do React
+    local color = data.color 
 
     SetNuiFocus(false, false)
 
@@ -25,15 +25,19 @@ RegisterNUICallback('startCreator', function(data, cb)
         ZoneCreator.startCreator({
             thickness = 10.0,
             onCreated = function(zoneData)
-                -- Gerar ID único
-                local uniqueId = 'drug_zone_' .. GetGameTimer() .. '_' .. math.random(1000, 9999)
-                
-                local points = {}
-                for _, p in ipairs(zoneData.points) do
-                    table.insert(points, {x=p.x, y=p.y, z=p.z})
-                end
-                
-                TriggerServerEvent('it-drugs:server:createGangZone', gangId, label, points, color, zoneData.flag)
+                -- Agora, em vez de salvar, reabrimos a UI no modo "Visual Editor"
+                SetNuiFocus(true, true)
+                SendNUIMessage({
+                    action = 'enableVisualEditor',
+                    data = {
+                        polyPoints = zoneData.points,
+                        flag = zoneData.flag,
+                        gangId = gangId,
+                        label = label,
+                        color = color,
+                        thickness = zoneData.thickness
+                    }
+                })
             end,
             onCanceled = function()
                 it.notify("Criação cancelada.")
@@ -44,6 +48,23 @@ RegisterNUICallback('startCreator', function(data, cb)
         it.notify("Erro interno: ZoneCreator não encontrado.", "error")
     end
 
+    if cb then cb('ok') end
+end)
+
+RegisterNUICallback('saveGangZoneFinal', function(data, cb)
+    -- data = { polyPoints, visualZone, gangId, label, color, flag }
+    local points = {}
+    for _, p in ipairs(data.polyPoints) do
+        table.insert(points, {x=p.x, y=p.y, z=p.z})
+    end
+    
+    TriggerServerEvent('it-drugs:server:createGangZone', data.gangId, data.label, points, data.color, data.flag, data.visualZone)
+    if cb then cb('ok') end
+end)
+
+RegisterNUICallback('saveVisualZone', function(data, cb)
+    -- data = { zoneId, visualZone }
+    TriggerServerEvent('it-drugs:server:updateGangVisual', data.zoneId, data.visualZone)
     if cb then cb('ok') end
 end)
 

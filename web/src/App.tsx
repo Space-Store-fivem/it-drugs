@@ -10,7 +10,7 @@ function cn(...classes: (string | undefined | null | false)[]) {
 }
 
 export default function App() {
-    const { open, tab, gangName, isAdmin, isBoss, setTab, setOpen, receiveNuiMessage } = useAppStore();
+    const { open, tab, gangName, isAdmin, isBoss, setTab, setOpen, receiveNuiMessage, isVisualEditorOpen } = useAppStore();
     const [showColorModal, setShowColorModal] = useState(false);
 
     useEffect(() => {
@@ -38,7 +38,9 @@ export default function App() {
             <CaptureProgress />
             <WarAlerts />
 
-            {open && (
+            {open && isVisualEditorOpen && <VisualEditor />}
+
+            {open && !isVisualEditorOpen && (
                 <div className="flex items-center justify-center w-screen h-screen bg-black/80">
                     <div className="w-[90vw] h-[85vh] bg-[#09090b]/95 border border-white/10 rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300">
                         {/* Header */}
@@ -741,6 +743,25 @@ function ZoneCreatorTab() {
                                 >
                                     <Settings className="w-3 h-3" />
                                 </button>
+                                <button
+                                    onClick={() => {
+                                        // Trigger Visual Editor for existing zone
+                                        // We need points to draw the ghost polygon
+                                        const z = useAppStore.getState().zones[id];
+                                        if (z) {
+                                            useAppStore.getState().setVisualEditorOpen(true, 'edit', {
+                                                zoneId: id,
+                                                polyPoints: z.polygon_points,
+                                                visualZone: z.visual_zone, // Server should send this
+                                                color: z.color
+                                            });
+                                        }
+                                    }}
+                                    className="p-1.5 bg-white/5 hover:bg-white/10 rounded-md text-zinc-400 hover:text-white transition-colors"
+                                    title="Editar Visual (Admin)"
+                                >
+                                    <MapIcon className="w-3 h-3" />
+                                </button>
                             </div>
                         </div>
                     ))}
@@ -1060,3 +1081,132 @@ function ColorPickerModal({ onClose, onSave, initialColor }: { onClose: () => vo
 }
 
 
+function VisualEditor() {
+    const { pendingZoneData, visualEditorMode, editingZoneId, setVisualEditorOpen } = useAppStore();
+    const [scale, setScale] = useState(1.0);
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        // Initialize Map in Editor Mode
+        MapModule.initMap();
+
+        const initData = pendingZoneData || {};
+
+        // If editing, use existing visual data if available
+        const existingVisual = visualEditorMode === 'edit' && initData.visualZone ? initData.visualZone : null;
+
+        // Reset scale
+        setScale(1.0);
+
+        setTimeout(() => {
+            MapModule.invalidateSize();
+            MapModule.enableVisualEditor(initData, existingVisual);
+        }, 100);
+
+        return () => {
+            // Cleanup done by MapModule.destroy or re-init
+        }
+    }, [pendingZoneData, visualEditorMode]);
+
+    const handleScaleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+        const s = parseFloat(e.target.value);
+        setScale(s);
+        MapModule.updateEditorScale(s);
+    };
+
+    const handleSave = async () => {
+        setSaving(true);
+        const visualData = MapModule.getEditorData(); // { x, y, radius }
+
+        if (visualEditorMode === 'create') {
+            // Finalize Creation
+            await fetch('https://it-drugs/saveGangZoneFinal', {
+                method: 'POST',
+                body: JSON.stringify({
+                    ...pendingZoneData,
+                    visualZone: visualData
+                })
+            });
+            setVisualEditorOpen(false); // Close editor
+            fetch('https://it-drugs/close', { method: 'POST', body: JSON.stringify({}) }); // Close NUI
+
+        } else if (visualEditorMode === 'edit' && editingZoneId) {
+            // Update Existing
+            await fetch('https://it-drugs/saveVisualZone', {
+                method: 'POST',
+                body: JSON.stringify({
+                    zoneId: editingZoneId,
+                    visualZone: visualData
+                })
+            });
+            setVisualEditorOpen(false); // Return to normal UI? Or close?
+            // Usually we want to go back to Admin Panel, but simple close is safer for now
+        }
+
+        setSaving(false);
+    };
+
+    const handleCancel = () => {
+        setVisualEditorOpen(false);
+        if (visualEditorMode === 'create') {
+            fetch('https://it-drugs/close', { method: 'POST', body: JSON.stringify({}) });
+        }
+    };
+
+    return (
+        <div className="flex items-center justify-center w-screen h-screen bg-black/80">
+            <div className="w-[90vw] h-[85vh] bg-[#09090b]/95 border border-white/10 rounded-xl shadow-2xl flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-300 relative">
+
+                {/* Map Container */}
+                <div id="game-map" className="absolute inset-0 z-0 bg-[#1a1a1a]" />
+
+                {/* Controls Overlay */}
+                <div className="absolute bottom-10 left-1/2 -translate-x-1/2 bg-black/80 backdrop-blur-md p-6 rounded-2xl border border-white/10 shadow-2xl min-w-[400px] z-10 flex flex-col gap-4">
+                    <div className="flex items-center justify-between">
+                        <h3 className="text-white font-bold uppercase tracking-wider flex items-center gap-2">
+                            <MapIcon className="w-5 h-5 text-purple-500" />
+                            Editor Visual
+                        </h3>
+                        <span className="text-xs text-zinc-400 bg-white/5 px-2 py-1 rounded">
+                            {visualEditorMode === 'create' ? 'NOVA ZONA' : 'EDITANDO ZONA'}
+                        </span>
+                    </div>
+
+                    <p className="text-xs text-zinc-400">Arraste o marcador central para mover. Use o slider para ajustar o tamanho.</p>
+
+                    <div className="space-y-2">
+                        <div className="flex justify-between text-xs font-bold text-zinc-500 uppercase">
+                            <span>Escala</span>
+                            <span>{scale.toFixed(1)}x</span>
+                        </div>
+                        <input
+                            type="range"
+                            min="0.5"
+                            max="2.0"
+                            step="0.1"
+                            value={scale}
+                            onChange={handleScaleChange}
+                            className="w-full accent-purple-500 h-2 bg-white/10 rounded-lg appearance-none cursor-pointer"
+                        />
+                    </div>
+
+                    <div className="flex gap-3 pt-2">
+                        <button
+                            onClick={handleCancel}
+                            className="flex-1 py-3 rounded-lg font-bold text-zinc-400 hover:text-white uppercase tracking-widest text-xs hover:bg-white/5 transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                        <button
+                            onClick={handleSave}
+                            disabled={saving}
+                            className="flex-[2] py-3 btn-primary rounded-lg text-white font-bold uppercase tracking-widest text-xs shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed shine-effect bg-purple-600 hover:bg-purple-700"
+                        >
+                            {saving ? 'Salvando...' : 'Confirmar Visual'}
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+}

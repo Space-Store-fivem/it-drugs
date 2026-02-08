@@ -53,6 +53,16 @@ local function loadGangZones()
                 if success then
                     zone.flag_point = decoded
                 end
+                if success then
+                    zone.flag_point = decoded
+                end
+            end
+
+            if zone.visual_zone then
+                local success, decoded = pcall(json.decode, zone.visual_zone)
+                if success then
+                    zone.visual_zone = decoded
+                end
             end
             
             if zone.upgrades then
@@ -179,7 +189,7 @@ RegisterNetEvent('it-drugs:server:declareWar', function(data)
 end)
 
 -- Create New Gang Zone
-RegisterNetEvent('it-drugs:server:createGangZone', function(gangName, label, points, color, flagPoint)
+RegisterNetEvent('it-drugs:server:createGangZone', function(gangName, label, points, color, flagPoint, visualZone)
     local src = source
     if not gangName or not label or not points then return end
     
@@ -189,10 +199,11 @@ RegisterNetEvent('it-drugs:server:createGangZone', function(gangName, label, poi
     local encodedPoints = json.encode(points)
     local encodedColor = json.encode(finalColor)
     local encodedFlag = flagPoint and json.encode(flagPoint) or nil
+    local encodedVisual = visualZone and json.encode(visualZone) or nil
     
     -- Add to database
-    MySQL.insert.await('INSERT INTO it_gang_zones (zone_id, label, owner_gang, polygon_points, color, flag_point) VALUES (?, ?, ?, ?, ?, ?)', {
-        zoneId, label, gangName, encodedPoints, encodedColor, encodedFlag
+    MySQL.insert.await('INSERT INTO it_gang_zones (zone_id, label, owner_gang, polygon_points, color, flag_point, visual_zone) VALUES (?, ?, ?, ?, ?, ?, ?)', {
+        zoneId, label, gangName, encodedPoints, encodedColor, encodedFlag, encodedVisual
     })
     
     -- Add to runtime table
@@ -204,6 +215,7 @@ RegisterNetEvent('it-drugs:server:createGangZone', function(gangName, label, poi
         polygon_points = points,
         color = finalColor,
         flag_point = flagPoint,
+        visual_zone = visualZone,
         current_status = 'peace'
     }
     
@@ -242,6 +254,34 @@ RegisterNetEvent('it-drugs:server:updateGangFlag', function(zoneId, flagPoint)
     
     TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
     it.notify(src, 'Sucesso', 'success', 'Bandeira da zona atualizada!')
+end)
+
+RegisterNetEvent('it-drugs:server:updateGangVisual', function(zoneId, visualZone)
+    local src = source
+    
+    -- Admin Check
+    local isPlayerAdmin = false
+    if it.isPlayerAdmin and it.isPlayerAdmin(src) then 
+        isPlayerAdmin = true
+    elseif IsPlayerAceAllowed(src, 'command') then 
+        isPlayerAdmin = true 
+    end
+    
+    if not isPlayerAdmin then
+        it.notify(src, 'Erro', 'error', 'Apenas administradores podem editar o visual da zona.')
+        return
+    end
+
+    if not gangZones[zoneId] then return end
+
+    MySQL.update('UPDATE it_gang_zones SET visual_zone = ? WHERE zone_id = ?', {
+        json.encode(visualZone), zoneId
+    })
+
+    gangZones[zoneId].visual_zone = visualZone
+    
+    TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
+    it.notify(src, 'Sucesso', 'success', 'Visual da zona atualizado!')
 end)
 
 -- Sistema de Upgrades

@@ -4,7 +4,6 @@ const HALF_WORLD = WORLD_SIZE / 2;
 const MAP_SIZE = 8192;
 const OFFSET_X = -523;
 const OFFSET_Y = -2214;
-const ZONE_SCALE = 1.3;
 
 declare const L: any;
 
@@ -52,11 +51,8 @@ function getGangColor(gangName: string) {
 }
 
 function gtaToMap(x: number, y: number): [number, number] {
-    const scaledX = (x + OFFSET_X) * ZONE_SCALE;
-    const scaledY = (y + OFFSET_Y) * ZONE_SCALE;
-
-    const mapX = ((scaledX + HALF_WORLD) / WORLD_SIZE) * MAP_SIZE;
-    const mapY = ((HALF_WORLD - scaledY) / WORLD_SIZE) * MAP_SIZE;
+    const mapX = (((x + OFFSET_X) + HALF_WORLD) / WORLD_SIZE) * MAP_SIZE;
+    const mapY = ((HALF_WORLD - (y + OFFSET_Y)) / WORLD_SIZE) * MAP_SIZE;
 
     return [mapY, mapX];
 }

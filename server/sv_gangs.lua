@@ -1,9 +1,17 @@
 gangZones = {}
 
+local function isPoliceJob(jobName)
+    for _, job in ipairs(Config.PoliceJobs) do
+        if job == jobName then return true end
+    end
+    return false
+end
+
 local function getPlayerGang(src)
     local Player = it.getPlayer(src)
     if not Player then return nil end
     
+    -- 1. Check Gang (priority)
     if it.core == 'qb-core' then
         if Player.PlayerData.gang and Player.PlayerData.gang.name ~= 'none' then
             return {
@@ -16,11 +24,19 @@ local function getPlayerGang(src)
     elseif it.core == 'esx' then
         -- Handle ESX Job as Gang if needed
         local job = Player.getJob()
+        -- Some servers use job as gang, but we also need to check for Police specifically below
+        -- If the job IS a police job, we want to handle it as 'police' gang type, unless standard ESX gangs are different.
+        -- Assuming standard ESX gangs are jobs. 
+    end
+    
+    -- 2. Check Police Job (If no gang or separate system)
+    local job = it.getPlayerJob(Player)
+    if isPoliceJob(job.name) then
         return {
-            name = job.name,
-            label = job.label,
-            grade = job.grade,
-            isBoss = (job.grade_name == 'boss')
+            name = 'police',
+            label = 'Polícia',
+            grade = (job.grade_name and type(job.grade_name) == 'table' and job.grade_name.level) or 0, -- Safe fallback
+            isBoss = job.isboss
         }
     end
     
@@ -50,9 +66,6 @@ local function loadGangZones()
             
             if zone.flag_point then
                 local success, decoded = pcall(json.decode, zone.flag_point)
-                if success then
-                    zone.flag_point = decoded
-                end
                 if success then
                     zone.flag_point = decoded
                 end
@@ -174,11 +187,30 @@ RegisterNetEvent('it-drugs:server:openGangPanel', function()
         end
 
         local availableGangs = getAllGangs()
+        
+        -- Tratamento para Polícia: Mascarar donos de zonas
+        local zonesToSend = gangZones
+        if gangName == 'police' then
+            zonesToSend = {}
+            for k, v in pairs(gangZones) do
+                -- Clona a zona para não alterar a global
+                local zoneCopy = {}
+                for key, val in pairs(v) do zoneCopy[key] = val end
+                
+                -- Se a zona não for da polícia, oculta o dono
+                if zoneCopy.owner_gang ~= 'police' then
+                    zoneCopy.owner_gang = 'Desconhecido' 
+                    zoneCopy.label = 'Zona Suspeita' -- Opcional: Ocultar nome também? Usei apenas dono por enquanto
+                    -- Mas o user disse "n vai ver de quem e a zona"
+                end
+                zonesToSend[k] = zoneCopy
+            end
+        end
 
         TriggerClientEvent('it-drugs:client:openGangUi', src, {
             gangName = gangName,
-            zones = gangZones,
-            isAdmin = true, -- FORCE TRUE for debug
+            zones = zonesToSend,
+            isAdmin = isPlayerAdmin, -- Mantenha admin real ou force false se quiser restringir policia admin
             availableGangs = availableGangs,
             gangGrade = playerGang.grade,
             isBoss = playerGang.isBoss
@@ -242,6 +274,11 @@ RegisterNetEvent('it-drugs:server:updateGangZoneOwner', function(zoneId, newOwne
     
     -- Busca a cor oficial da gangue vencedora
     local winningColor = getGangColor(newOwner) or gangZones[zoneId].color
+    
+    -- Tratamento Especial Polícia: Cor Azul
+    if newOwner == 'police' then
+        winningColor = {r=0, g=0, b=255}
+    end
     
     -- Update specific fields
     gangZones[zoneId].owner_gang = newOwner
@@ -309,6 +346,12 @@ RegisterNetEvent('it-drugs:server:buyUpgrade', function(zoneId, upgradeId)
     -- Validar se jogador é líder da gangue dona da zona
     if not playerGang or playerGang.name ~= zone.owner_gang or not playerGang.isBoss then
         it.notify(src, 'Erro', 'error', 'Apenas o líder da gangue pode comprar upgrades!')
+        return
+    end
+    
+    -- Restrição: Polícia não compra upgrades
+    if playerGang.name == 'police' then
+        it.notify(src, 'Restrito', 'error', 'A Polícia não pode comprar upgrades para a zona.')
         return
     end
     

@@ -18,13 +18,13 @@ function it.getPlayerJob(player)
     local job = {}
     if it.core == 'qb-core' then
         job = {
-            name = player.job.name,
-            label = player.job.label,
-            grade_name = player.job.grade,
-            grade_label = player.job.grade.name,
-            grade_salary = player.job.payment,
-            isboss = player.job.isboss,
-            onduty = player.job.onduty
+            name = player.PlayerData.job.name,
+            label = player.PlayerData.job.label,
+            grade_name = player.PlayerData.job.grade,
+            grade_label = player.PlayerData.job.grade.name,
+            grade_salary = player.PlayerData.job.payment,
+            isboss = player.PlayerData.job.isboss,
+            onduty = player.PlayerData.job.onduty
         }
     elseif it.core == 'esx' then
         job = {

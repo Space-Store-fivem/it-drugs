@@ -53,7 +53,8 @@ function refreshGangZones()
             })
 
             -- Upgrades: Spawn físicos (Mesas e Guardas)
-            if zone.upgrades then
+            -- Bloqueio: Se a zona for da Polícia, NÃO SPAWNA NADA DE UPGRADE (Limpeza Visual)
+            if zone.upgrades and zone.owner_gang ~= 'police' then
                 for _, upgrade in ipairs(zone.upgrades) do
                     if upgrade.placed and upgrade.coords then
                         if upgrade.type == 'table' then
@@ -339,6 +340,11 @@ end)
 RegisterNetEvent('it-drugs:client:openGangUi', function(data)
     SetNuiFocus(true, true)
     
+    local sentUpgrades = Config.ZoneUpgrades
+    if data.gangName == 'police' then
+        sentUpgrades = {} -- Hide upgrades from police
+    end
+    
     SendNUIMessage({
         action = 'open',
         gangName = data.gangName,
@@ -347,7 +353,7 @@ RegisterNetEvent('it-drugs:client:openGangUi', function(data)
         availableGangs = data.availableGangs,
         gangGrade = data.gangGrade,
         isBoss = data.isBoss,
-        upgradesConfig = Config.ZoneUpgrades
+        upgradesConfig = sentUpgrades
     })
 end)
 

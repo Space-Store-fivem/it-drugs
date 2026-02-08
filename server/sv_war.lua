@@ -14,11 +14,19 @@ local function updateWarStatus(zoneId, status)
     TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
 end
 
+local function isPoliceJob(jobName)
+    for _, job in ipairs(Config.PoliceJobs) do
+        if job == jobName then return true end
+    end
+    return false
+end
+
 -- Helper to get player gang
 local function getPlayerGang(src)
     local Player = it.getPlayer(src)
     if not Player then return nil end
     
+    -- 1. Check Gang (priority)
     if it.core == 'qb-core' then
         if Player.PlayerData.gang and Player.PlayerData.gang.name ~= 'none' then
             return {
@@ -34,6 +42,16 @@ local function getPlayerGang(src)
             name = job.name,
             label = job.label,
             grade = job.grade
+        }
+    end
+    
+    -- 2. Check Police Job (If no gang or separate system)
+    local job = it.getPlayerJob(Player)
+    if isPoliceJob(job.name) then
+        return {
+            name = 'police',
+            label = 'Polícia',
+            grade = (job.grade_name and type(job.grade_name) == 'table' and job.grade_name.level) or 0
         }
     end
     

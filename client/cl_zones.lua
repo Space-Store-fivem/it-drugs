@@ -216,7 +216,7 @@ local function loadZones()
         end
     end
     
-    -- Criar mesas
+    -- Criar mesas de venda (Config)
     for zoneId, tables in pairs(drugTables) do
         for _, tableData in ipairs(tables) do
             if tableData.coords then
@@ -225,10 +225,27 @@ local function loadZones()
             end
         end
     end
+
+    -- Criar mesas de gangue (Upgrades)
+    if gangZones then
+        for zoneId, zone in pairs(gangZones) do
+            if zone.upgrades then
+                for _, upgrade in ipairs(zone.upgrades) do
+                    if upgrade.placed and upgrade.coords and upgrade.type == 'table' then
+                        local coords = vector4(upgrade.coords.x, upgrade.coords.y, upgrade.coords.z, upgrade.coords.w or 0.0)
+                        spawnDrugTable(upgrade.id, coords, upgrade.model, zoneId)
+                    end
+                end
+            end
+        end
+    end
 end
 
 -- Spawnar mesa de drogas (tornar global)
+-- Spawnar mesa de drogas (tornar global)
 function spawnDrugTable(tableId, coords, model, zoneId)
+    if Config.Debug then print(string.format('^3[IT-DRUGS DEBUG] Spawning Table: %s | Model: %s | Zone: %s^7', tostring(tableId), tostring(model), tostring(zoneId))) end
+
     -- Verificar se a mesa já existe e remover antes de criar nova
     if tableObjects[tableId] then
         if DoesEntityExist(tableObjects[tableId].object) then
@@ -240,8 +257,15 @@ function spawnDrugTable(tableId, coords, model, zoneId)
     local modelHash = GetHashKey(model)
     
     RequestModel(modelHash)
-    while not HasModelLoaded(modelHash) do
+    local timeout = 0
+    while not HasModelLoaded(modelHash) and timeout < 100 do
         Wait(100)
+        timeout = timeout + 1
+    end
+
+    if not HasModelLoaded(modelHash) then
+        print('^1[IT-DRUGS DEBUG] Failed to load table model: ' .. tostring(model) .. '^7')
+        return
     end
     
     local tableObj = CreateObject(modelHash, coords.x, coords.y, coords.z, false, false, false)
@@ -477,6 +501,14 @@ RegisterNetEvent('it-drugs:client:gangAlert', function(alertData)
     end
 end)
 
+-- Sincronizar mesas quando as zonas de gangue atualizarem
+RegisterNetEvent('it-drugs:client:updateGangZones', function(zones)
+    -- gangZones é global, mas garantimos a atualização aqui se necessário
+    if zones then gangZones = zones end
+    print('^2[IT-DRUGS DEBUG] Gang Zones updated. Refreshing tables...^7')
+    loadZones()
+end)
+
 RegisterNetEvent('it-drugs:client:zonesUpdated', function(zones, tables)
     -- Atualizar dados imediatamente
     if zones then drugZones = zones end
@@ -517,20 +549,13 @@ local function isPointInZone(point, zone)
     
     -- Tentar usar o objeto de zona do ox_lib se disponível (Mais preciso e consistente)
     if zone.zone_id and zoneObjects[zone.zone_id] then
-        print('^3[IT-DRUGS DEBUG] Testing ox_lib zone: ' .. tostring(zone.zone_id) .. '^7')
-        local inside = zoneObjects[zone.zone_id]:contains(point)
-        if inside then
-            print('^2[IT-DRUGS DEBUG] Ox_lib says INSIDE^7')
-            return true, "inside"
-        else
-            print('^1[IT-DRUGS DEBUG] Ox_lib says OUTSIDE^7')
-        end
-        -- Se falhar no ox_lib, continuamos para o manual apenas para dar feedback detalhado (Z vs XY)
-        -- Mas se o ox_lib diz que não, provavelmente é não.
+       -- keeping this commented out or minimal as per previous issues, or we can leave it commented if user preferred manual check. 
+       -- Let's just remove the disabled block to clean up if we are sure manual is better.
+       -- actually, let's just leave the manual part as primary since ox_lib failed.
     end
 
     if not zone.polygon_points or #zone.polygon_points < 3 then 
-        print('^1[IT-DRUGS DEBUG] Invalid polygon points: ' .. tostring(#(zone.polygon_points or {})) .. '^7')
+        if Config.Debug then print('^1[IT-DRUGS DEBUG] Invalid polygon points: ' .. tostring(#(zone.polygon_points or {})) .. '^7') end
         return false, "invalid_zone_points" 
     end
     
@@ -538,9 +563,6 @@ local function isPointInZone(point, zone)
     local inside = false
     local j = #zone.polygon_points
     
-    print(string.format("^3[ZONE CHECK START]^7 Point: %.2f, %.2f, %.2f", x, y, z))
-    print("^3[ZONE DATA]^7 Thickness: " .. tostring(zone.thickness) .. " | Points: " .. tostring(#zone.polygon_points))
-
     for i = 1, #zone.polygon_points do
         local pi = zone.polygon_points[i]
         local pj = zone.polygon_points[j]
@@ -549,7 +571,7 @@ local function isPointInZone(point, zone)
         
         if intersect then
             inside = not inside
-            print(string.format("  -> Intersected edge %d-%d. Inside flip to: %s", j, i, tostring(inside)))
+             -- print(string.format("  -> Intersected edge %d-%d. Inside flip to: %s", j, i, tostring(inside)))
         end
         j = i
     end
@@ -778,12 +800,31 @@ end
 
 -- Evento genérico para posicionar upgrades (Mesas ou NPCs)
 RegisterNetEvent('it-drugs:client:positionUpgrade', function(zoneId, upgradeUniqueId, model, type)
-    print('^3[IT-DRUGS DEBUG] Client received positionUpgrade event. Zone: ' .. tostring(zoneId) .. ' | ID: ' .. tostring(upgradeUniqueId) .. ' | Model: ' .. tostring(model) .. '^7')
+    print(string.format('^3[IT-DRUGS DEBUG] Client received positionUpgrade event. Zone: %s | ID: %s | Model: %s | Type: %s^7', tostring(zoneId), tostring(upgradeUniqueId), tostring(model), tostring(type)))
+    
+    -- Se o tipo não vier, tentar descobrir pelo modelo na config
+    if not type then
+        for k, v in pairs(Config.ZoneUpgrades) do
+            if v.model == model then
+                type = v.type
+                print('^3[IT-DRUGS DEBUG] Resolved missing type from config: ' .. tostring(type) .. '^7')
+                break
+            end
+        end
+    end
+
+    if type == 'table' then
+        -- Alteração solicitada: Mesas viram itens no inventário em vez de serem posicionadas
+        TriggerServerEvent('it-drugs:server:giveUpgradeItem', zoneId, upgradeUniqueId, type, model)
+        lib.notify({type = 'success', description = 'A mesa foi adicionada ao seu inventário!'})
+        return
+    end
+
     local ped = PlayerPedId()
     local coords = GetEntityCoords(ped)
     local heading = GetEntityHeading(ped)
-
-    -- Iniciar posicionamento
+    
+    -- Iniciar posicionamento (Apenas para NPCs agora)
     positionUpgradeGeneric(zoneId, upgradeUniqueId, model, vector4(coords.x, coords.y, coords.z, heading), type)
 end)
 
@@ -795,19 +836,40 @@ function positionUpgradeGeneric(zoneId, upgradeUniqueId, model, currentCoords, t
 
     -- Carregar modelo
     local modelHash = GetHashKey(model)
+    if not IsModelInCdimage(modelHash) then
+        print('^1[IT-DRUGS DEBUG] Model not found in CD image: ' .. tostring(model) .. '^7')
+    end
+
     RequestModel(modelHash)
-    while not HasModelLoaded(modelHash) do
+    local timeout = 0
+    while not HasModelLoaded(modelHash) and timeout < 100 do
         Wait(100)
+        timeout = timeout + 1
+    end
+    
+    if not HasModelLoaded(modelHash) then
+        print('^1[IT-DRUGS DEBUG] Failed to load model: ' .. tostring(model) .. '^7')
+        lib.notify({type = 'error', description = 'Erro ao carregar modelo: ' .. tostring(model)})
+        return
     end
     
     local ped = PlayerPedId()
     local coords = GetEntityCoords(ped)
     local _, groundZ = GetGroundZFor_3dCoord(coords.x, coords.y, coords.z, true)
     
+    -- Se groundZ falhar (retornar 0 em interiores), usar z do player
+    if groundZ == 0.0 then
+        groundZ = coords.z - 1.0
+    end
+
     -- Criar objeto temporário (fantasma)
     local tempObj
     if type == 'npc' then
+        print('^3[IT-DRUGS DEBUG] Spawning NPC ghost: ' .. tostring(model) .. ' at ' .. tostring(coords) .. '^7')
         tempObj = CreatePed(4, modelHash, coords.x, coords.y, groundZ, 0.0, false, false)
+        if not DoesEntityExist(tempObj) then
+             print('^1[IT-DRUGS DEBUG] Failed to create NPC ghost entity!^7')
+        end
         SetEntityAlpha(tempObj, 200, false)
         SetEntityCollision(tempObj, false, false)
         FreezeEntityPosition(tempObj, true)
@@ -848,6 +910,10 @@ function positionUpgradeGeneric(zoneId, upgradeUniqueId, model, currentCoords, t
 
                 -- Visualização da Zona e Verificação
                 local zone = drugZones[zoneId]
+                if not zone and gangZones then
+                    zone = gangZones[zoneId]
+                end
+
                 local isInside = false
                 local reason = nil
                 

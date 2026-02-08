@@ -137,45 +137,43 @@ RegisterNetEvent('it-drugs:client:warEnded', function(data)
 end)
 
 local function spawnWarNPCs(zoneId)
-    if spawnedPeds and #spawnedPeds > 0 then return end -- Já spawnou nesta guerra
+    -- Lógica alterada: Em vez de spawnar, recrutamos os guardas existentes (cl_gangs.lua)
+    -- Usando FindFirstPed para evitar crash com wrappers bugados de GetGamePool
     
-    local zone = gangZones[zoneId]
-    if not zone or not zone.polygon_points then return end
-
-    local model = `g_m_y_ballaeast_01` -- Default NPC Model (Ballas)
-    if zone.owner_gang == 'vagos' then model = `g_m_y_mexgoon_01` end
+    local handle, ped = FindFirstPed()
+    local success
+    local count = 0
     
-    RequestModel(model)
-    local timeout = 0
-    while not HasModelLoaded(model) and timeout < 100 do 
-        Wait(10) 
-        timeout = timeout + 1
-    end
-
-    if not HasModelLoaded(model) then return end
-
-    for i = 1, 5 do -- Spawn exatos 5 NPCs conforme pedido
-        local p = zone.polygon_points[math.random(#zone.polygon_points)]
-        local ped = CreatePed(4, model, p.x, p.y, p.z, 0.0, true, false)
+    repeat
+        if DoesEntityExist(ped) and not IsPedAPlayer(ped) then
+            -- Verificar se é um guarda desta zona (State Bags)
+            if Entity(ped).state.warZoneId == zoneId then
+                -- Evitar duplicados na lista
+                local alreadyTracked = false
+                for _, t in ipairs(spawnedPeds) do 
+                    if t.ped == ped then 
+                        alreadyTracked = true 
+                        break 
+                    end 
+                end
+                
+                if not alreadyTracked then
+                    table.insert(spawnedPeds, { ped = ped, zoneId = zoneId })
+                    count = count + 1
+                    
+                    -- Reforçar agressividade na guerra
+                    SetPedCombatAttributes(ped, 46, true) -- FIGHT_TO_DEATH
+                    SetPedCombatRange(ped, 2) -- FAR
+                end
+            end
+        end
         
-        SetPedRelationshipGroupHash(ped, `HATES_PLAYER`)
-        SetPedAccuracy(ped, 30)
-        SetPedArmour(ped, 50)
-        SetPedMaxHealth(ped, 200)
-        SetEntityHealth(ped, 200)
-        GiveWeaponToPed(ped, `WEAPON_COMPACTRIFLE`, 999, false, true)
-        SetPedDropsWeaponsWhenDead(ped, false)
-        SetPedCombatAttributes(ped, 46, true) -- Always fight
-        
-        -- Task NPC to wander and attack
-        TaskWanderInArea(ped, p.x, p.y, p.z, 20.0, 10.0, 10.0)
-        
-        table.insert(spawnedPeds, ped)
-        
-        -- Replicate state to server
-        Entity(ped).state:set('isWarNPC', true, true)
-        Entity(ped).state:set('warZoneId', zoneId, true)
-    end
+        success, ped = FindNextPed(handle)
+    until not success
+    
+    EndFindPed(handle)
+    
+    print('^2[IT-DRUGS WAR] Recrutados '..count..' guardas para a guerra na zona '..zoneId..'^7')
 end
 
 -- Thread to monitor NPC deaths and check for clearance
@@ -187,23 +185,40 @@ CreateThread(function()
 
         if hasWars and #spawnedPeds > 0 then
             for i = #spawnedPeds, 1, -1 do
-                local ped = spawnedPeds[i]
-                if DoesEntityExist(ped) and IsEntityDead(ped) then
-                    local zoneId = Entity(ped).state.warZoneId
-                    
-                    SetEntityAsNoLongerNeeded(ped)
+                local data = spawnedPeds[i]
+                local ped = data.ped
+                local zoneId = data.zoneId
+                
+                local isDead = false
+                local exists = DoesEntityExist(ped)
+                
+                if not exists then 
+                    isDead = true 
+                elseif IsEntityDead(ped) then 
+                    isDead = true 
+                end
+                
+                if isDead then
+                    if exists then SetEntityAsNoLongerNeeded(ped) end
                     table.remove(spawnedPeds, i)
                     
-                    -- Victory Condition: All NPCs Dead
-                    if #spawnedPeds == 0 then
+                    -- Victory Condition: Check if ANY defenders for this zone remain
+                    local defendersLeft = 0
+                    for _, remaining in ipairs(spawnedPeds) do
+                        if remaining.zoneId == zoneId then
+                            defendersLeft = defendersLeft + 1
+                        end
+                    end
+                    
+                    if defendersLeft == 0 then
                         if activeWars[zoneId] then
-                             print('[IT-DRUGS] Todos os defensores eliminados! Enviando vitória...')
+                             print('[IT-DRUGS] Todos os defensores da zona '..zoneId..' eliminados! Enviando vitória...')
                              local winner = activeWars[zoneId].attacker 
                              TriggerServerEvent('it-drugs:server:forceEndWar', zoneId, winner)
                         end
                     end
-                elseif DoesEntityExist(ped) then -- NPC Alive Check logic for position
-                    local zoneId = Entity(ped).state.warZoneId
+                elseif exists then -- NPC Alive Check logic for position
+                     -- State Bags might be lost if we rely purely on entity, but we have zoneId in 'data'
                     local zone = gangZones[zoneId]
                     
                     if zone and zone.polygon_points then
@@ -213,19 +228,20 @@ CreateThread(function()
                         
                         if not isInside and not isReturning then
                              -- Outside: Force Run to Flag
-                             local flag = zone.flag_point
-                             ClearPedTasks(ped)
-                             TaskGoToCoordAnyMeans(ped, flag.x, flag.y, flag.z, 2.0, 0, 0, 786603, 0)
-                             Entity(ped).state:set('isReturning', true, true)
-                             -- print('Debug: NPC returning to zone '..zoneId)
+                             local flag = zone.flag_point or zone.polygon_points[1] -- Fallback
+                             if flag then
+                                 ClearPedTasks(ped)
+                                 TaskGoToCoordAnyMeans(ped, flag.x, flag.y, flag.z, 2.0, 0, 0, 786603, 0)
+                                 Entity(ped).state:set('isReturning', true, true)
+                             end
                         elseif isInside and isReturning then
                              -- Back Inside: Resume Wander
-                             local flag = zone.flag_point
-                             ClearPedTasks(ped)
-                             -- Wander in smaller radius (10m) to stay in
-                             TaskWanderInArea(ped, flag.x, flag.y, flag.z, 10.0, 10.0, 10.0) 
-                             Entity(ped).state:set('isReturning', false, true)
-                             -- print('Debug: NPC resumed patrol in '..zoneId)
+                             local flag = zone.flag_point or zone.polygon_points[1]
+                             if flag then
+                                 ClearPedTasks(ped)
+                                 TaskWanderInArea(ped, flag.x, flag.y, flag.z, 10.0, 10.0, 10.0) 
+                                 Entity(ped).state:set('isReturning', false, true)
+                             end
                         end
                     end
                 end

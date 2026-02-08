@@ -1,5 +1,6 @@
 gangZones = {} -- GLOBAL (Internal to resource scope) for access in cl_war.lua
 local zonePolys = {}
+local spawnedGuards = {} -- Moved to top for scope visibility
 
 -- Load zones from server
 RegisterNetEvent('it-drugs:client:updateGangZones', function(zones)
@@ -14,13 +15,18 @@ RegisterNetEvent('it-drugs:client:updateGangZones', function(zones)
 end)
 
 function refreshGangZones()
-    -- Clear existing polys
+    -- cleanupAllGuards() -- DESATIVADO: Evitar resetar todos os NPCs a cada update
+    
+    -- Track valid IDs to cleanup removed upgrades
+    local validGuardIds = {}
+
+    -- Clear existing polys (Visual Zones only)
     for _, poly in pairs(zonePolys) do
         if poly.remove then poly:remove() end
     end
     zonePolys = {}
 
-    -- Create new polys
+    -- Create new polys & Process Upgrades
     for zoneId, zone in pairs(gangZones) do
         if zone.polygon_points and #zone.polygon_points >= 3 then
             local points = {}
@@ -39,7 +45,6 @@ function refreshGangZones()
                 thickness = 50.0, -- Tall zones for territory
                 debug = false, -- Enable for debug view
                 onEnter = function()
-                    -- Trigge zone logic (invasion check etc)
                     TriggerEvent('it-drugs:client:enterGangZone', zoneId)
                 end,
                 onExit = function()
@@ -52,68 +57,82 @@ function refreshGangZones()
                 for _, upgrade in ipairs(zone.upgrades) do
                     if upgrade.placed and upgrade.coords then
                         if upgrade.type == 'table' then
-                            -- Mesas já são gerenciadas pelo cl_zones.lua/cl_drug_table.lua
-                            -- Mas se precisar de lógica extra, pode ser aqui
+                            -- Mesas já são gerenciadas pelo cl_zones.lua
                         elseif upgrade.type == 'npc' then
-                            -- Lógica para spawnar guarda
-                            spawnZoneGuard(zoneId, upgrade)
+                            -- Lógica para spawnar guarda (Inteligente)
+                            if upgrade.id then
+                                validGuardIds[upgrade.id] = true
+                                spawnZoneGuard(zoneId, upgrade)
+                            end
                         end
                     end
                 end
             end
-
-            -- Ponto da Bandeira (Legacy/Alternative)
-            --[[
-            if zone.flag_point and type(zone.flag_point) == 'table' then
-                local flagCoords = vector3(zone.flag_point.x, zone.flag_point.y, zone.flag_point.z)
-                
-                if playerGang and playerGang.name == zone.owner_gang then
-                    if exports.ox_target then
-                        exports.ox_target:addSphereZone({
-                            coords = flagCoords,
-                            radius = 1.0,
-                            debug = false,
-                            options = {
-                                {
-                                    name = 'it_drugs_flag_' .. zoneId,
-                                    icon = 'fas fa-flag',
-                                    label = 'Gerenciar Zona',
-                                    onSelect = function()
-                                        -- Agora gerenciado via Painel (NUI)
-                                        -- openZoneShop(zoneId)
-                                    end
-                                }
-                            }
-                        })
-                    end
-                end
-            end
-            ]]
+        end
+    end
+    
+    -- Limpeza de guardas removidos (que não estão mais na lista validGuardIds)
+    for id, ped in pairs(spawnedGuards) do
+        if not validGuardIds[id] then
+            if DoesEntityExist(ped) then DeleteEntity(ped) end
+            spawnedGuards[id] = nil
         end
     end
 end
 
--- Variável para rastrear guardas spawnados
-local spawnedGuards = {}
+            -- Legacy Flag Point Logic Removed to clean up syntax
+
+
+local function cleanupAllGuards()
+    for id, ped in pairs(spawnedGuards) do
+        if DoesEntityExist(ped) then
+            DeleteEntity(ped)
+        end
+    end
+    spawnedGuards = {}
+end
+
+AddEventHandler('onResourceStop', function(resource)
+    if resource == GetCurrentResourceName() then
+        cleanupAllGuards()
+    end
+end)
 
 function spawnZoneGuard(zoneId, upgrade)
     local uniqueId = upgrade.id
-    if spawnedGuards[uniqueId] and DoesEntityExist(spawnedGuards[uniqueId]) then return end
-
-    -- Verificar cooldown de morte
+    
+    -- 1. Verificar cooldown de morte (Prioridade Total)
     if upgrade.deathTime and upgrade.deathTime > 0 then
-        -- Obter tempo do servidor (aproximado) ou verificar timestamp
-        -- Como deathTime é timestamp, precisamos comparar com timestamp atual
-        -- Usar GetCloudTimeAsInt() para UTC timestamp
         local currentTime = GetCloudTimeAsInt()
         local respawnTime = (Config.ZoneUpgrades[upgrade.type_id].respawnTime or 10) * 60
         
         if (currentTime - upgrade.deathTime) < respawnTime then
-            -- Ainda em cooldown
-            return
+            -- Está no cooldown: Se o boneco ainda existe (bug?), deleta
+            if spawnedGuards[uniqueId] then
+                if DoesEntityExist(spawnedGuards[uniqueId]) then
+                    DeleteEntity(spawnedGuards[uniqueId])
+                end
+                spawnedGuards[uniqueId] = nil
+            end
+            return -- Não spawna
+        end
+    end
+
+    -- 2. Se já existe, verificar estado
+    if spawnedGuards[uniqueId] then
+        local existingPed = spawnedGuards[uniqueId]
+        if DoesEntityExist(existingPed) and not IsEntityDead(existingPed) then
+            -- Está vivo e saudável -> Não faz nada (Mantém posição/ação atual)
+            -- Apenas atualiza estado se necessário? Por enquanto, retorno simples evita o "reset"
+            return 
+        else
+            -- Existe na lista mas tá morto/sumiu -> Limpar para respawnar
+            if DoesEntityExist(existingPed) then DeleteEntity(existingPed) end
+            spawnedGuards[uniqueId] = nil
         end
     end
     
+    -- 3. Spawna novo (apenas se passou pelos checks acima)
     local model = upgrade.model
     if not model then return end
     
@@ -122,51 +141,115 @@ function spawnZoneGuard(zoneId, upgrade)
     while not HasModelLoaded(modelHash) do Wait(10) end
     
     local coords = upgrade.coords
-    local npc = CreatePed(4, modelHash, coords.x, coords.y, coords.z, coords.w, false, true)
+    -- AUMENTAR Z em +1.0 para evitar nascer no chão
+    local npc = CreatePed(4, modelHash, coords.x, coords.y, coords.z + 1.0, coords.w, true, true)
     
+    local timeout = 0
+    while not DoesEntityExist(npc) and timeout < 50 do
+        Wait(10)
+        timeout = timeout + 1
+    end
+
+    if not DoesEntityExist(npc) then return end
+
     SetEntityAsMissionEntity(npc, true, true)
     SetNetworkIdExistsOnAllMachines(NetworkGetNetworkIdFromEntity(npc), true)
     
-    -- Configurar Guarda
+    -- Configurar Guarda (Patrulha + Combate)
     local playerGang = it.getPlayerGang()
     local zone = gangZones[zoneId]
     
-    -- Dar armas
+    -- 1. Dar armas (sem sacar)
     local configGuard = Config.ZoneUpgrades[upgrade.type_id]
     if configGuard and configGuard.weapons then
         for _, weapon in ipairs(configGuard.weapons) do
             GiveWeaponToPed(npc, GetHashKey(weapon), 999, false, true)
         end
-        SetCurrentPedWeapon(npc, GetHashKey(configGuard.weapons[1]), true)
     end
     
-    -- Comportamento (atacar inimigos, proteger área)
-    -- Definir grupo de relacionamento baseado na gangue dona
-    local groupHash = GetHashKey('GANG_' .. string.upper(zone.owner_gang))
+    -- 2. Grupos e Relacionamentos
+    local groupName = 'GANG_' .. string.upper(zone.owner_gang)
+    local groupHash = GetHashKey(groupName)
+    
+    if not DoesRelationshipGroupExist(groupHash) then
+        AddRelationshipGroup(groupName, groupHash)
+    end
+    
     SetPedRelationshipGroupHash(npc, groupHash)
     
-    -- Configurações de combate
-    SetPedCombatAttributes(npc, 46, true) -- FIGHT_TO_DEATH
-    SetPedCombatAttributes(npc, 5, true) -- COMBAT_PRIVATE_PROPERTY (defender área)
-    SetPedFleeAttributes(npc, 0, false)
-    SetPedAccuracy(npc, 60)
-    SetPedArmour(npc, 100)
+    -- Padrão: Odeia Jogadores (Proteção da Zona)
+    SetRelationshipBetweenGroups(5, groupHash, GetHashKey("PLAYER"))
+    SetRelationshipBetweenGroups(5, GetHashKey("PLAYER"), groupHash)
+
+    -- Exceção: Se o player for da mesma gangue, vira amigo
+    if playerGang and playerGang.name == zone.owner_gang then
+        local playerGroup = GetPedRelationshipGroupHash(PlayerPedId())
+        SetRelationshipBetweenGroups(1, groupHash, playerGroup) -- 1 = Respect/Friend
+        SetRelationshipBetweenGroups(1, playerGroup, groupHash)
+    end
     
-    -- Tarefa de guarda
-    TaskGuardCurrentPosition(npc, 15.0, 15.0, 1) 
+    -- 3. Configurações de combate
+    SetPedCombatAttributes(npc, 46, true) -- FIGHT_TO_DEATH
+    SetPedCombatAttributes(npc, 5, true) -- COMBAT_PRIVATE_PROPERTY
+    SetPedCombatAttributes(npc, 0, false) -- CAN_USE_COVER
+    SetPedCombatAttributes(npc, 20, true) -- CALL_FOR_HELP
+    SetPedCombatMovement(npc, 2) -- DEFENSIVE (Procura cover e ataca)
+    SetPedCombatRange(npc, 2) -- FAR
+    
+    -- Ignorar aliados (redundancia)
+    SetCanAttackFriendly(npc, false, false)
+    
+    -- ConfigFlags
+    SetPedConfigFlag(npc, 292, false)
+    SetPedConfigFlag(npc, 140, false)
+    SetPedCanRagdoll(npc, true)
+    SetPedCanPlayAmbientAnims(npc, true)
+    SetBlockingOfNonTemporaryEvents(npc, false) 
+    SetEntityCollision(npc, true, true)
+    
+    SetPedFleeAttributes(npc, 0, false)
+    SetPedAccuracy(npc, 70)
+    SetPedArmour(npc, 100)
+    SetEntityInvincible(npc, false)
+    
+    -- Integar com Sistema de Guerra (cl_war.lua)
+    Entity(npc).state:set('isWarNPC', true, true)
+    Entity(npc).state:set('warZoneId', zoneId, true)
+    Entity(npc).state:set('gangOwner', zone.owner_gang, true)
+    
+    -- Tarefa de Patrulha (Wander)
+    FreezeEntityPosition(npc, false)
+    ClearPedTasksImmediately(npc)
     
     spawnedGuards[uniqueId] = npc
     SetModelAsNoLongerNeeded(modelHash)
+    
+    -- Atraso para garantir inicialização antes da task
+    CreateThread(function()
+        Wait(1000)
+        if DoesEntityExist(npc) then
+            print('^2[IT-DRUGS DEBUG] NPC Spawned & RAGDOLL Wakeup ' .. uniqueId .. '^7')
+            
+            -- Pulo do Gato: Forçar Ragdoll para garantir física
+            SetPedToRagdoll(npc, 2000, 2000, 0, 0, 0, 0)
+            Wait(2500) -- Esperar levantar
+            
+            -- Agora mandar andar
+            if DoesEntityExist(npc) then
+                TaskWanderInArea(npc, coords.x, coords.y, coords.z, 5.0, 5.0, 5.0)
+                SetPedKeepTask(npc, true)
+            end
+        end
+    end)
 
-    -- Monitorar morte (opcional, melhor feito via evento de dano ou loop leve)
+    -- Monitorar morte
     CreateThread(function()
         while DoesEntityExist(npc) do
             if IsEntityDead(npc) then
                 TriggerServerEvent('it-drugs:server:guardDied', zoneId, uniqueId)
-                spawnedGuards[uniqueId] = nil
                 break
             end
-            Wait(5000)
+            Wait(2000)
         end
     end)
 end
@@ -266,6 +349,44 @@ RegisterNetEvent('it-drugs:client:openGangUi', function(data)
         isBoss = data.isBoss,
         upgradesConfig = Config.ZoneUpgrades
     })
+end)
+
+-- DEBUG COMMAND (Diagnosticar NPCs travados)
+-- DEBUG COMMAND (Diagnosticar NPCs travados)
+RegisterCommand('checknpc', function()
+    local playerPed = PlayerPedId()
+    local coords = GetEntityCoords(playerPed)
+    local closestPed = 0
+    local closestDist = 10.0
+    
+    local handle, ped = FindFirstPed()
+    local success
+    
+    repeat
+        if DoesEntityExist(ped) and ped ~= playerPed and not IsPedAPlayer(ped) then
+            local dist = #(coords - GetEntityCoords(ped))
+            if dist < closestDist then
+                closestDist = dist
+                closestPed = ped
+            end
+        end
+        
+        success, ped = FindNextPed(handle)
+    until not success
+    
+    EndFindPed(handle)
+    
+    if closestPed ~= 0 then
+        local frozen = IsEntityPositionFrozen(closestPed) and "^1YES^7" or "^2NO^7"
+        local netId = NetworkGetNetworkIdFromEntity(closestPed)
+        
+        print(string.format('^3[NPC CHECK]^7 ID: %s | NetID: %s | Frozen: %s | Health: %s/%s', closestPed, netId, frozen, GetEntityHealth(closestPed), GetEntityMaxHealth(closestPed)))
+        print(string.format('^3[NPC CHECK]^7 Coords: %s | Dist: %.2f | Group: %s', GetEntityCoords(closestPed), closestDist, GetPedRelationshipGroupHash(closestPed)))
+        print(string.format('^3[NPC CHECK]^7 ScenarioActive: %s | Ragdoll: %s | Ducking: %s', IsPedActiveInScenario(closestPed), IsPedRagdoll(closestPed), IsPedDucking(closestPed)))
+        lib.notify({ type = 'info', description = 'Check F8 for NPC info. Frozen: '..frozen })
+    else
+        lib.notify({ type = 'error', description = 'Nenhum NPC próximo encontrada.' })
+    end
 end)
 
 -- NUI Callbacks are handled in cl_nui.lua

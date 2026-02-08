@@ -79,6 +79,18 @@ local function loadGangZones()
             gangZones[zone.zone_id] = zone
         end
     end
+    
+    -- RESETAR DeathTime de todos os NPCs ao iniciar o servidor
+    for _, zone in pairs(gangZones) do
+        if zone.upgrades then
+            for _, upgrade in ipairs(zone.upgrades) do
+                if upgrade.type == 'npc' then
+                    upgrade.deathTime = 0
+                end
+            end
+        end
+    end
+
     TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
 end
 

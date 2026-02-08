@@ -164,6 +164,24 @@ CreateThread(function()
                     
                     updateWarStatus(req.zone_id, 'war')
                     
+                    -- REVIVER GUARDAS (Resetar cooldown de morte)
+                    -- Para garantir que a guerra tenha defensores mesmo se foram mortos recentemente
+                    local zone = getZone(req.zone_id)
+                    if zone and zone.upgrades then
+                        local revivedCount = 0
+                        for _, upgrade in pairs(zone.upgrades) do
+                            if upgrade.type == 'npc' then
+                                upgrade.deathTime = 0 -- Resetar timer de morte
+                                revivedCount = revivedCount + 1
+                            end
+                        end
+                        if revivedCount > 0 then
+                            print('[IT-DRUGS] Revividos '..revivedCount..' guardas para a guerra na zona '..req.zone_id)
+                            -- Sincronizar estado global das zonas para que clientes respawnem os NPCs
+                            TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
+                        end
+                    end
+                    
                     -- Update DB Status
                     MySQL.update.await('UPDATE it_war_requests SET status = "completed" WHERE id = ?', {req.id})
                     

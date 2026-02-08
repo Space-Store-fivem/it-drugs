@@ -716,3 +716,47 @@ RegisterNetEvent('it-drugs:server:updateZoneColor', function(data)
 
     ShowNotification(src, 'Zona não encontrada (nem Droga nem Território).', 'error')
 end)
+
+RegisterNetEvent('it-drugs:server:giveUpgradeItem', function(zoneId, upgradeUniqueId, type, model)
+    local src = source
+    print(string.format('^3[IT-DRUGS DEBUG] Server giveUpgradeItem. Source: %s | Model: %s^7', src, tostring(model)))
+    
+    local Player = it.getPlayer(src)
+    if not Player then return end
+    
+    -- Mapeamento de modelo para item (Hardcoded ou busca na Config)
+    local item = nil
+    
+    -- Tentar encontrar pelo modelo na config
+    for k, v in pairs(Config.ZoneUpgrades) do
+        if v.model == model then
+            item = v.item or k -- Use 'item' field OR the key config name
+            print('^3[IT-DRUGS DEBUG] Found mapped item: ' .. tostring(item) .. '^7')
+            break
+        end
+    end
+    
+    if not item then
+        -- Fallback manual (Corrigido para usar os nomes de itens válidos do Config.ProcessingTables)
+        if model == 'bkr_prop_weed_table_01a' then item = 'weed_processing_table'
+        elseif model == 'bkr_prop_coke_table01a' then item = 'cocaine_processing_table'
+        end
+        print('^3[IT-DRUGS DEBUG] Used fallback item: ' .. tostring(item) .. '^7')
+    end
+
+    if not item then
+        ShowNotification(src, 'Erro: Item não configurado para este modelo ('..tostring(model)..').', 'error')
+        print('^1[IT-DRUGS DEBUG] ERROR: No item found for model ' .. tostring(model) .. '^7')
+        return
+    end
+    
+    -- Dar item ao jogador
+    local success = it.giveItem(src, item, 1)
+    print(string.format('^3[IT-DRUGS DEBUG] Give Item Result: %s^7', tostring(success)))
+    
+    if success then
+        ShowNotification(src, 'Você recebeu '..item..' no inventário.', 'success')
+    else
+        ShowNotification(src, 'Erro ao adicionar item ao inventário (Cheio ou Inválido?).', 'error')
+    end
+end)

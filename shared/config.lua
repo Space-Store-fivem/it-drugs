@@ -567,3 +567,36 @@ Config.ZoneWalkers = {
     lifetime = 180000, -- Tempo de vida do NPC walker em ms (180 segundos = 3 minutos)
     patrolTime = 30000, -- Tempo que o NPC fica patrulhando dentro da zona antes de sair (ms)
 }
+
+-- Configurações de Upgrades da Zona
+Config.ZoneUpgrades = {
+    ['weed_table'] = {
+        label = 'Mesa de Maconha',
+        price = 5000,
+        type = 'table', -- Tipo especial que spawna prop e tem lógica própria
+        model = 'bkr_prop_weed_table_01a',
+        description = 'Uma mesa para processar maconha dentro da zona.',
+        max = 3, -- Máximo por zona
+        icon = 'table'
+    },
+    ['cocaine_table'] = {
+        label = 'Mesa de Cocaína',
+        price = 8000,
+        type = 'table',
+        model = 'bkr_prop_coke_table01a',
+        description = 'Uma mesa para processar cocaína dentro da zona.',
+        max = 3,
+        icon = 'table'
+    },
+    ['security_guard'] = {
+        label = 'Guarda de Segurança',
+        price = 2000,
+        type = 'npc', -- Tipo NPC que protege a área
+        model = 'g_m_y_ballas_01', -- Modelo padrão (pode ser sobrescrito pela gangue)
+        description = 'Um guarda armado que ataca inimigos.',
+        max = 5,
+        respawnTime = 10, -- Minutos para respawnar após morrer
+        weapons = {'WEAPON_PISTOL', 'WEAPON_BAT'},
+        icon = 'user-secret'
+    }
+}

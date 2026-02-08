@@ -98,3 +98,9 @@ RegisterNUICallback('updateZoneColor', function(data, cb)
      TriggerServerEvent('it-drugs:server:updateZoneColor', data)
     if cb then cb('ok') end
 end)
+
+RegisterNUICallback('buyUpgrade', function(data, cb)
+    -- data = { zoneId: string, upgradeId: string }
+    TriggerServerEvent('it-drugs:server:buyUpgrade', data.zoneId, data.upgradeId)
+    if cb then cb('ok') end
+end)

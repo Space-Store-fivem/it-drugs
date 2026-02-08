@@ -133,6 +133,7 @@ export default function App() {
 
 function ZoneDetails() {
     const { selectedZoneId, zones, gangName, activeWars, isBoss, gangGrade } = useAppStore();
+    const [showShopModal, setShowShopModal] = useState(false);
     const [showRequestModal, setShowRequestModal] = useState(false);
 
     if (!selectedZoneId) return null;
@@ -169,9 +170,14 @@ function ZoneDetails() {
                     </div>
                     <div className="flex gap-2">
                         {canEdit && (
-                            <button onClick={handleEditFlag} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-zinc-400 hover:text-white" title="Editar Bandeira">
-                                <Flag className="w-4 h-4" />
-                            </button>
+                            <>
+                                <button onClick={() => setShowShopModal(true)} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-purple-400 hover:text-white" title="Loja da Zona">
+                                    <Swords className="w-4 h-4" />
+                                </button>
+                                <button onClick={handleEditFlag} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-zinc-400 hover:text-white" title="Editar Bandeira">
+                                    <Flag className="w-4 h-4" />
+                                </button>
+                            </>
                         )}
                         <button onClick={() => useAppStore.getState().setSelectedZoneId(null)} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-zinc-400 hover:text-white">
                             <X className="w-4 h-4" />
@@ -261,7 +267,88 @@ function ZoneDetails() {
                     onClose={() => setShowRequestModal(false)}
                 />
             )}
+
+            {showShopModal && (
+                <UpgradeShopModal
+                    zoneId={selectedZoneId}
+                    onClose={() => setShowShopModal(false)}
+                />
+            )}
         </>
+    );
+}
+
+function UpgradeShopModal({ zoneId, onClose }: { zoneId: string, onClose: () => void }) {
+    const { upgradesConfig, zones } = useAppStore();
+    const zone = zones[zoneId];
+
+    // Count existing upgrades
+    const getCount = (typeId: string) => {
+        if (!zone.upgrades) return 0;
+        return (zone.upgrades as any[]).filter((u: any) => u.type_id === typeId).length;
+    };
+
+    const handleBuy = (upgradeId: string) => {
+        fetch('https://it-drugs/buyUpgrade', {
+            method: 'POST',
+            body: JSON.stringify({ zoneId, upgradeId })
+        });
+        // We trigger close to start placement immediately as envisioned in previous tool steps
+        useAppStore.getState().setOpen(false);
+        fetch('https://it-drugs/close', { method: 'POST', body: JSON.stringify({}) });
+    };
+
+    return (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-300">
+            <div className="w-full max-w-2xl glass-panel rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 duration-300 border border-white/10">
+                <div className="glass-header px-6 py-5 flex justify-between items-center bg-[#0a0a0f]/50">
+                    <div>
+                        <h2 className="text-xl font-bold text-white flex items-center gap-3 uppercase tracking-wider text-glow">
+                            <Shield className="w-5 h-5 text-purple-500" />
+                            Loja da Zona
+                        </h2>
+                        <p className="text-xs text-zinc-400 font-mono tracking-widest mt-1 uppercase">Melhorias para {zone.label}</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-zinc-400 hover:text-white">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[60vh] overflow-y-auto">
+                    {Object.entries(upgradesConfig || {}).map(([id, data]: [string, any]) => {
+                        const count = getCount(id);
+                        const isMax = count >= data.max;
+
+                        return (
+                            <div key={id} className="glass-panel p-4 rounded-xl flex flex-col gap-3 group hover:border-purple-500/30 transition-all">
+                                <div className="flex justify-between items-start">
+                                    <div className="p-2 bg-purple-500/10 rounded-lg text-purple-400">
+                                        {data.type === 'npc' ? <User className="w-5 h-5" /> : <Inbox className="w-5 h-5" />}
+                                    </div>
+                                    <span className="px-2 py-1 bg-white/5 rounded text-[10px] font-bold uppercase text-zinc-500 tracking-wider">
+                                        {count}/{data.max}
+                                    </span>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-white uppercase tracking-wide">{data.label}</h4>
+                                    <p className="text-xs text-zinc-400 mt-1 line-clamp-2">{data.description}</p>
+                                </div>
+                                <div className="mt-auto pt-3 border-t border-white/5 flex items-center justify-between">
+                                    <span className="font-mono text-green-400 font-bold">${data.price}</span>
+                                    <button
+                                        onClick={() => handleBuy(id)}
+                                        disabled={isMax}
+                                        className="px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-xs font-bold uppercase tracking-widest shadow-lg shadow-purple-900/20 transition-all active:scale-95"
+                                    >
+                                        {isMax ? 'Máximo' : 'Comprar'}
+                                    </button>
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            </div>
+        </div>
     );
 }
 

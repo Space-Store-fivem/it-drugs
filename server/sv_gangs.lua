@@ -55,6 +55,17 @@ local function loadGangZones()
                 end
             end
             
+            if zone.upgrades then
+                local success, decoded = pcall(json.decode, zone.upgrades)
+                if success then
+                    zone.upgrades = decoded
+                else
+                    zone.upgrades = {}
+                end
+            else
+                zone.upgrades = {}
+            end
+            
             gangZones[zone.zone_id] = zone
         end
     end
@@ -189,7 +200,7 @@ RegisterNetEvent('it-drugs:server:createGangZone', function(gangName, label, poi
         zone_id = zoneId,
         label = label,
         owner_gang = gangName,
-        owner_gang = gangName,
+
         polygon_points = points,
         color = finalColor,
         flag_point = flagPoint,
@@ -220,22 +231,159 @@ RegisterNetEvent('it-drugs:server:updateGangZoneOwner', function(zoneId, newOwne
     TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
 end)
 
--- Update Gang Flag
 RegisterNetEvent('it-drugs:server:updateGangFlag', function(zoneId, flagPoint)
+    local src = source
+    if not gangZones[zoneId] then return end
+
+    MySQL.update('UPDATE it_gang_zones SET flag_point = ? WHERE zone_id = ?', {
+        json.encode(flagPoint), zoneId
+    })
+
+    
+    TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
+    it.notify(src, 'Sucesso', 'success', 'Bandeira da zona atualizada!')
+end)
+
+-- Sistema de Upgrades
+
+-- Evento para comprar upgrade
+RegisterNetEvent('it-drugs:server:buyUpgrade', function(zoneId, upgradeId)
     local src = source
     local playerGang = getPlayerGang(src)
     
     if not gangZones[zoneId] then return end
+    local zone = gangZones[zoneId]
     
-    -- Validar se quem está chamando é o dono da gangue ou admin (comentado por enquanto, assumindo verificação no client ou que playerGang já filtra)
-    -- Idealmente verificar se playerGang.name == gangZones[zoneId].owner_gang e se tem permissão de líder
+    -- Validar se jogador é líder da gangue dona da zona
+    if not playerGang or playerGang.name ~= zone.owner_gang or not playerGang.isBoss then
+        it.notify(src, 'Erro', 'error', 'Apenas o líder da gangue pode comprar upgrades!')
+        return
+    end
     
-    gangZones[zoneId].flag_point = flagPoint
+    local upgradeConfig = Config.ZoneUpgrades[upgradeId]
+    if not upgradeConfig then
+        it.notify(src, 'Erro', 'error', 'Upgrade não encontrado.')
+        return
+    end
     
-    MySQL.update('UPDATE it_gang_zones SET flag_point = ? WHERE zone_id = ?', {
-        json.encode(flagPoint), zoneId
+    -- Verificar limite de upgrades
+    local currentCount = 0
+    if zone.upgrades then
+        for _, upgrade in ipairs(zone.upgrades) do
+            if upgrade.type_id == upgradeId then
+                currentCount = currentCount + 1
+            end
+        end
+    end
+    
+    if currentCount >= upgradeConfig.max then
+        it.notify(src, 'Erro', 'error', 'Limite máximo deste upgrade atingido!')
+        return
+    end
+    
+    -- Verificar dinheiro (usar bridge)
+    local price = upgradeConfig.price
+    local playerMoney = it.getMoney(src, 'bank')
+    if playerMoney < price then
+        playerMoney = it.getMoney(src, 'money')
+        if playerMoney < price then
+            it.notify(src, 'Erro', 'error', 'Dinheiro insuficiente!')
+            return
+        end
+        it.removeMoney(src, 'money', price)
+    else
+        it.removeMoney(src, 'bank', price)
+    end
+    
+    -- Adicionar upgrade à lista (pendente de posicionamento)
+    if not zone.upgrades then zone.upgrades = {} end
+    
+    local newUpgrade = {
+        id = 'upg_' .. math.random(100000, 999999),
+        type_id = upgradeId,
+        type = upgradeConfig.type,
+        model = upgradeConfig.model,
+        coords = nil, -- Será definido no posicionamento
+        placed = false,
+        deathTime = 0 -- Para guardas
+    }
+    
+    table.insert(zone.upgrades, newUpgrade)
+    
+    -- Salvar no banco
+    MySQL.update('UPDATE it_gang_zones SET upgrades = ? WHERE zone_id = ?', {
+        json.encode(zone.upgrades), zoneId
     })
     
+    -- Atualizar clientes
     TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
-    it.notify(src, 'Sucesso', 'success', 'Bandeira da zona atualizada!')
+    
+    it.notify(src, 'Sucesso', 'success', 'Upgrade comprado! Agora posicione-o na zona.')
+    
+    -- Iniciar posicionamento automaticamente para quem comprou
+    print('^3[IT-DRUGS DEBUG] Triggering client event: it-drugs:client:positionUpgrade for source: ' .. src .. '^7')
+    TriggerClientEvent('it-drugs:client:positionUpgrade', src, zoneId, newUpgrade.id, upgradeConfig.model, upgradeConfig.type)
+end)
+
+-- Evento para salvar posicionamento do upgrade
+RegisterNetEvent('it-drugs:server:placeUpgrade', function(zoneId, upgradeUniqueId, coords, heading)
+    local src = source
+    local playerGang = getPlayerGang(src)
+    
+    if not gangZones[zoneId] then return end
+    local zone = gangZones[zoneId]
+    
+    -- Validar permissão
+    if not playerGang or playerGang.name ~= zone.owner_gang or not playerGang.isBoss then
+        return
+    end
+    
+    -- Encontrar o upgrade na lista
+    local found = false
+    if zone.upgrades then
+        for i, upgrade in ipairs(zone.upgrades) do
+            if upgrade.id == upgradeUniqueId then
+                upgrade.coords = {x = coords.x, y = coords.y, z = coords.z, w = heading}
+                upgrade.placed = true
+                found = true
+                break
+            end
+        end
+    end
+    
+    if found then
+        MySQL.update('UPDATE it_gang_zones SET upgrades = ? WHERE zone_id = ?', {
+            json.encode(zone.upgrades), zoneId
+        })
+        
+        TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
+        it.notify(src, 'Sucesso', 'success', 'Upgrade posicionado com sucesso!')
+    else
+        it.notify(src, 'Erro', 'error', 'Upgrade não encontrado para posicionamento.')
+    end
+end)
+
+-- Evento para registrar morte de guarda (chamado pelo client quando NPC morre)
+RegisterNetEvent('it-drugs:server:guardDied', function(zoneId, upgradeUniqueId)
+    if not gangZones[zoneId] then return end
+    local zone = gangZones[zoneId]
+    
+    local found = false
+    if zone.upgrades then
+        for i, upgrade in ipairs(zone.upgrades) do
+            if upgrade.id == upgradeUniqueId then
+                upgrade.deathTime = os.time()
+                found = true
+                break
+            end
+        end
+    end
+    
+    if found then
+        MySQL.update('UPDATE it_gang_zones SET upgrades = ? WHERE zone_id = ?', {
+            json.encode(zone.upgrades), zoneId
+        })
+        -- Sincronizar apenas o tempo de morte
+        TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
+    end
 end)

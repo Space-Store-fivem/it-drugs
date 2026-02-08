@@ -55,6 +55,105 @@ local function DrawText3D(x, y, z, text)
     end
 end
 
+-- Helper Functions para RayCast (Portado de cl_processing.lua)
+local RotationToDirection = function(rot)
+    local rotZ = math.rad(rot.z)
+    local rotX = math.rad(rot.x)
+    local cosOfRotX = math.abs(math.cos(rotX))
+    return vector3(-math.sin(rotZ) * cosOfRotX, math.cos(rotZ) * cosOfRotX, math.sin(rotX))
+end
+
+local RayCastCamera = function(dist)
+    local camRot = GetGameplayCamRot()
+    local camPos = GetGameplayCamCoord()
+    local dir = RotationToDirection(camRot)
+    local dest = camPos + (dir * dist)
+    local ray = StartShapeTestRay(camPos, dest, 17, -1, 0)
+    local _, hit, endPos, surfaceNormal, entityHit = GetShapeTestResult(ray)
+    if hit == 0 then endPos = dest end
+    return hit, endPos, entityHit, surfaceNormal
+end
+
+-- Função para desenhar linha 3D
+local function DrawLine3D(x1, y1, z1, x2, y2, z2, r, g, b, a)
+    DrawLine(x1, y1, z1, x2, y2, z2, r, g, b, a)
+end
+
+-- Função para desenhar polígono de zona
+local function DrawZonePolygon(zone, color, isCurrent)
+    if not zone or not zone.polygon_points or #zone.polygon_points < 3 then
+        return
+    end
+    
+    local points = zone.polygon_points
+    local thickness = zone.thickness or 10.0
+    
+    -- Desenhar linhas do polígono (parte inferior)
+    for i = 1, #points do
+        local p1 = points[i]
+        local p2 = points[(i % #points) + 1]
+        
+        -- Linha inferior
+        DrawLine3D(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z, color.r, color.g, color.b, color.a)
+        
+        -- Linha vertical (conectando inferior e superior)
+        DrawLine3D(p1.x, p1.y, p1.z, p1.x, p1.y, p1.z + thickness, color.r, color.g, color.b, color.a)
+        
+        -- Linha superior
+        DrawLine3D(p1.x, p1.y, p1.z + thickness, p2.x, p2.y, p2.z + thickness, color.r, color.g, color.b, color.a)
+    end
+    
+    -- Desenhar pontos dos vértices
+    for i = 1, #points do
+        local p = points[i]
+        local pointSize = Config.ZoneDebug.pointSize or 0.3
+        
+        -- Ponto inferior
+        DrawMarker(1, p.x, p.y, p.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, pointSize, pointSize, pointSize, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
+        
+        -- Ponto superior
+        DrawMarker(1, p.x, p.y, p.z + thickness, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, pointSize, pointSize, pointSize, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
+    end
+    
+    -- Desenhar centro da zona com informações
+    local sumX, sumY, sumZ = 0, 0, 0
+    for _, point in ipairs(points) do
+        sumX = sumX + point.x
+        sumY = sumY + point.y
+        sumZ = sumZ + point.z
+    end
+    local centerX = sumX / #points
+    local centerY = sumY / #points
+    local centerZ = sumZ / #points
+    
+    -- Texto com informações da zona
+    local zoneName = zone.name or "Sem Nome"
+    local zoneGang = zone.gang_name or "Público"
+    local tableCount = 0
+    if drugTables[zone.zone_id] then
+        tableCount = #drugTables[zone.zone_id]
+    end
+    
+    local infoText = string.format("~b~Zona: ~w~%s\n~y~Gang: ~w~%s\n~g~Mesas: ~w~%d", zoneName, zoneGang, tableCount)
+    DrawText3D(centerX, centerY, centerZ + (thickness / 2), infoText)
+end
+
+-- Função para desenhar mesas
+local function DrawTableDebug(tableData, zoneId)
+    if not tableData or not tableData.coords then
+        return
+    end
+    
+    local coords = tableData.coords
+    local color = Config.ZoneDebug.zoneColors.table
+    
+    -- Desenhar marcador na mesa
+    DrawMarker(1, coords.x, coords.y, coords.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
+    
+    -- Texto com ID da mesa
+    DrawText3D(coords.x, coords.y, coords.z + 1.0, string.format("~y~Mesa ID: ~w~%s", tableData.table_id or "N/A"))
+end
+
 -- Carregar zonas do servidor
 local function loadZones()
     drugZones, drugTables = lib.callback.await('it-drugs:server:getZones', false)
@@ -414,45 +513,77 @@ local positioningTableObj = nil
 
 -- Função para verificar se coordenadas estão dentro de uma zona
 local function isPointInZone(point, zone)
-    if not zone.polygon_points or #zone.polygon_points < 3 then return false end
+    if not zone then return false, "invalid_zone_data" end
+    
+    -- Tentar usar o objeto de zona do ox_lib se disponível (Mais preciso e consistente)
+    if zone.zone_id and zoneObjects[zone.zone_id] then
+        print('^3[IT-DRUGS DEBUG] Testing ox_lib zone: ' .. tostring(zone.zone_id) .. '^7')
+        local inside = zoneObjects[zone.zone_id]:contains(point)
+        if inside then
+            print('^2[IT-DRUGS DEBUG] Ox_lib says INSIDE^7')
+            return true, "inside"
+        else
+            print('^1[IT-DRUGS DEBUG] Ox_lib says OUTSIDE^7')
+        end
+        -- Se falhar no ox_lib, continuamos para o manual apenas para dar feedback detalhado (Z vs XY)
+        -- Mas se o ox_lib diz que não, provavelmente é não.
+    end
+
+    if not zone.polygon_points or #zone.polygon_points < 3 then 
+        print('^1[IT-DRUGS DEBUG] Invalid polygon points: ' .. tostring(#(zone.polygon_points or {})) .. '^7')
+        return false, "invalid_zone_points" 
+    end
     
     local x, y, z = point.x, point.y, point.z
     local inside = false
     local j = #zone.polygon_points
     
+    print(string.format("^3[ZONE CHECK START]^7 Point: %.2f, %.2f, %.2f", x, y, z))
+    print("^3[ZONE DATA]^7 Thickness: " .. tostring(zone.thickness) .. " | Points: " .. tostring(#zone.polygon_points))
+
     for i = 1, #zone.polygon_points do
         local pi = zone.polygon_points[i]
         local pj = zone.polygon_points[j]
         
-        if ((pi.y > y) ~= (pj.y > y)) and (x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x) then
+        local intersect = ((pi.y > y) ~= (pj.y > y)) and (x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x)
+        
+        if intersect then
             inside = not inside
+            print(string.format("  -> Intersected edge %d-%d. Inside flip to: %s", j, i, tostring(inside)))
         end
         j = i
     end
     
-    -- Verificar altura (mais flexível para zonas em prédios)
-    if inside then
-        local thickness = zone.thickness or 10.0
-        local minZ = math.huge
-        local maxZ = -math.huge
-        
-        -- Encontrar min e max Z dos pontos do polígono
-        for i = 1, #zone.polygon_points do
-            local pz = zone.polygon_points[i].z
-            if pz < minZ then minZ = pz end
-            if pz > maxZ then maxZ = pz end
-        end
-        
-        -- Aplicar thickness a partir do minZ e maxZ
-        local zoneMinZ = minZ
-        local zoneMaxZ = maxZ + thickness
-        
-        -- Verificar se o ponto está dentro da faixa de altura
-        -- Permitir uma margem de erro de 2m para cima e para baixo
-        inside = z >= (zoneMinZ - 2.0) and z <= (zoneMaxZ + 2.0)
+    if not inside then
+        print("^1[ZONE CHECK FAIL XY]^7 Point outside polygon limits.")
+        return false, "outside_xy"
     end
     
-    return inside
+    -- Verificar altura (mais flexível para zonas em prédios)
+    local thickness = zone.thickness or 10.0
+    local minZ = math.huge
+    local maxZ = -math.huge
+    
+    -- Encontrar min e max Z dos pontos do polígono
+    for i = 1, #zone.polygon_points do
+        local pz = zone.polygon_points[i].z
+        if pz < minZ then minZ = pz end
+        if pz > maxZ then maxZ = pz end
+    end
+    
+    -- Aplicar thickness a partir do minZ e maxZ
+    local zoneMinZ = minZ
+    local zoneMaxZ = maxZ + thickness
+    
+    -- Verificar se o ponto está dentro da faixa de altura
+    -- Aumentada margem de erro para 50.0 para evitar frustrações
+    if z < (zoneMinZ - 50.0) or z > (zoneMaxZ + 50.0) then
+        -- Debug para entender o porque falha
+        print(string.format("^3[ZONE FAIL Z]^7 PointZ: %.2f | MinZ: %.2f | MaxZ: %.2f", z, zoneMinZ - 50.0, zoneMaxZ + 50.0))
+        return false, "outside_z"
+    end
+    
+    return true, "inside"
 end
 
 -- Comando removido - usar painel (/drugzone)
@@ -545,15 +676,25 @@ local function positionTable(zoneId, tableId, model, currentCoords)
             
             local zone = drugZones[editZoneId]
             local inZone = false
+            local reason = nil
             if zone then
-                inZone = isPointInZone(newCoords, zone)
+                inZone, reason = isPointInZone(newCoords, zone)
+                DrawZonePolygon(zone, {r=0, g=255, b=0, a=100}, true)
             end
             
             local onScreen, screenX, screenY = World3dToScreen2d(newCoords.x, newCoords.y, newCoords.z + 1.0)
             if onScreen then
+                local statusText = "~g~Dentro da Zona"
+                if not inZone then
+                    if reason == "outside_z" then
+                        statusText = "~r~Altura Incorreta (Fora Z)"
+                    else
+                        statusText = "~r~Fora da Zona"
+                    end
+                end
+                
                 DrawText3D(newCoords.x, newCoords.y, newCoords.z + 1.0, 
-                    inZone and "~g~Dentro da Zona~w~\n[Enter] Confirmar | [X] Cancelar" or 
-                    "~r~Fora da Zona~w~\n[Enter] Confirmar | [X] Cancelar")
+                    statusText .. "~w~\n[Enter] Confirmar | [X] Cancelar")
             end
             
             if IsControlJustPressed(0, 191) then
@@ -634,6 +775,136 @@ local function positionTable(zoneId, tableId, model, currentCoords)
         SetModelAsNoLongerNeeded(modelHash)
     end)
 end
+
+-- Evento genérico para posicionar upgrades (Mesas ou NPCs)
+RegisterNetEvent('it-drugs:client:positionUpgrade', function(zoneId, upgradeUniqueId, model, type)
+    print('^3[IT-DRUGS DEBUG] Client received positionUpgrade event. Zone: ' .. tostring(zoneId) .. ' | ID: ' .. tostring(upgradeUniqueId) .. ' | Model: ' .. tostring(model) .. '^7')
+    local ped = PlayerPedId()
+    local coords = GetEntityCoords(ped)
+    local heading = GetEntityHeading(ped)
+
+    -- Iniciar posicionamento
+    positionUpgradeGeneric(zoneId, upgradeUniqueId, model, vector4(coords.x, coords.y, coords.z, heading), type)
+end)
+
+-- Função genérica de posicionamento (Adaptada de positionTable)
+-- Função genérica de posicionamento (Adaptada para RayCast estilo Processing Table)
+function positionUpgradeGeneric(zoneId, upgradeUniqueId, model, currentCoords, type)
+    -- Configuração de distância do RayCast (padrão 10.0 se não existir na config)
+    local rayCastDist = Config.rayCastingDistance or 10.0
+
+    -- Carregar modelo
+    local modelHash = GetHashKey(model)
+    RequestModel(modelHash)
+    while not HasModelLoaded(modelHash) do
+        Wait(100)
+    end
+    
+    local ped = PlayerPedId()
+    local coords = GetEntityCoords(ped)
+    local _, groundZ = GetGroundZFor_3dCoord(coords.x, coords.y, coords.z, true)
+    
+    -- Criar objeto temporário (fantasma)
+    local tempObj
+    if type == 'npc' then
+        tempObj = CreatePed(4, modelHash, coords.x, coords.y, groundZ, 0.0, false, false)
+        SetEntityAlpha(tempObj, 200, false)
+        SetEntityCollision(tempObj, false, false)
+        FreezeEntityPosition(tempObj, true)
+    else
+        tempObj = CreateObject(modelHash, coords.x, coords.y, groundZ, false, false, false)
+        SetEntityCollision(tempObj, false, false)
+        SetEntityAlpha(tempObj, 150, false)
+        SetEntityHeading(tempObj, 0.0)
+    end
+    
+    lib.showTextUI('Posicionando Upgrade\n[E] Confirmar\n[G] Cancelar\n[Setas] Rodar\nUse o mouse para mover', {
+        position = "left-center",
+        icon = "arrows-up-down-left-right",
+    })
+    
+    local placed = false
+    local rotation = 0.0
+    
+    CreateThread(function()
+        while not placed and DoesEntityExist(tempObj) do
+            Wait(0)
+            
+            -- RayCast da câmera
+            local hit, dest, _, surfaceNormal = RayCastCamera(rayCastDist)
+            
+            if hit == 1 then
+                SetEntityCoords(tempObj, dest.x, dest.y, dest.z)
+                
+                -- Controle de Rotação (Setas)
+                if IsControlPressed(0, 174) then -- Seta Esquerda
+                    rotation = rotation + 1.0
+                    if rotation >= 360.0 then rotation = 0.0 end
+                elseif IsControlPressed(0, 175) then -- Seta Direita
+                    rotation = rotation - 1.0
+                    if rotation <= 0.0 then rotation = 360.0 end
+                end
+                SetEntityHeading(tempObj, rotation)
+
+                -- Visualização da Zona e Verificação
+                local zone = drugZones[zoneId]
+                local isInside = false
+                local reason = nil
+                
+                if zone then
+                    -- Desenhar visual da zona
+                    DrawZonePolygon(zone, {r=0, g=255, b=0, a=100}, true)
+                    
+                    -- Verificar se está dentro
+                    isInside, reason = isPointInZone(dest, zone)
+                    
+                    if isInside then
+                        if type ~= 'npc' then -- NPCs nao suportam outline
+                             SetEntityDrawOutline(tempObj, true)
+                             SetEntityDrawOutlineColor(0, 255, 0, 255) -- Verde se OK
+                        end
+                    else
+                        if type ~= 'npc' then
+                             SetEntityDrawOutline(tempObj, true)
+                             SetEntityDrawOutlineColor(255, 0, 0, 255) -- Vermelho se Fora
+                        end
+                        
+                        local failText = reason == "outside_z" and "~r~Altura Incorreta" or "~r~Fora da Zona"
+                        DrawText3D(dest.x, dest.y, dest.z + 1.0, failText)
+                    end
+                end
+
+                -- Confirmar (E)
+                if IsControlJustPressed(0, 38) then
+                    if isInside then
+                        placed = true
+                        TriggerServerEvent('it-drugs:server:placeUpgrade', zoneId, upgradeUniqueId, dest, rotation)
+                        DeleteEntity(tempObj)
+                        lib.hideTextUI()
+                        lib.notify({ type = 'success', description = 'Upgrade posicionado com sucesso!' })
+                        break
+                    else
+                        lib.notify({ type = 'error', description = reason == "outside_z" and 'Altura incorreta!' or 'Precisa ser dentro da zona!' })
+                    end
+                end
+
+                -- Cancelar (G)
+                if IsControlJustPressed(0, 47) then 
+                    placed = true
+                    DeleteEntity(tempObj)
+                    lib.hideTextUI()
+                    lib.notify({ type = 'error', description = 'Posicionamento cancelado.' })
+                    break
+                end
+            else
+                -- Se o RayCast não bater em nada, manter perto do jogador para não sumir
+                local pCoords = GetEntityCoords(ped)
+                SetEntityCoords(tempObj, pCoords.x, pCoords.y, pCoords.z - 5.0) -- Esconder embaixo da terra ou perto
+            end
+        end
+    end)
+end
+
 
 -- Função para listar zonas
 local function showZonesList()
@@ -974,85 +1245,7 @@ end)
 -- SISTEMA DE DEBUG
 -- ============================================
 
--- Função para desenhar linha 3D
-local function DrawLine3D(x1, y1, z1, x2, y2, z2, r, g, b, a)
-    DrawLine(x1, y1, z1, x2, y2, z2, r, g, b, a)
-end
 
--- Função para desenhar polígono de zona
-local function DrawZonePolygon(zone, color, isCurrent)
-    if not zone or not zone.polygon_points or #zone.polygon_points < 3 then
-        return
-    end
-    
-    local points = zone.polygon_points
-    local thickness = zone.thickness or 10.0
-    
-    -- Desenhar linhas do polígono (parte inferior)
-    for i = 1, #points do
-        local p1 = points[i]
-        local p2 = points[(i % #points) + 1]
-        
-        -- Linha inferior
-        DrawLine3D(p1.x, p1.y, p1.z, p2.x, p2.y, p2.z, color.r, color.g, color.b, color.a)
-        
-        -- Linha vertical (conectando inferior e superior)
-        DrawLine3D(p1.x, p1.y, p1.z, p1.x, p1.y, p1.z + thickness, color.r, color.g, color.b, color.a)
-        
-        -- Linha superior
-        DrawLine3D(p1.x, p1.y, p1.z + thickness, p2.x, p2.y, p2.z + thickness, color.r, color.g, color.b, color.a)
-    end
-    
-    -- Desenhar pontos dos vértices
-    for i = 1, #points do
-        local p = points[i]
-        local pointSize = Config.ZoneDebug.pointSize or 0.3
-        
-        -- Ponto inferior
-        DrawMarker(1, p.x, p.y, p.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, pointSize, pointSize, pointSize, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
-        
-        -- Ponto superior
-        DrawMarker(1, p.x, p.y, p.z + thickness, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, pointSize, pointSize, pointSize, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
-    end
-    
-    -- Desenhar centro da zona com informações
-    local sumX, sumY, sumZ = 0, 0, 0
-    for _, point in ipairs(points) do
-        sumX = sumX + point.x
-        sumY = sumY + point.y
-        sumZ = sumZ + point.z
-    end
-    local centerX = sumX / #points
-    local centerY = sumY / #points
-    local centerZ = sumZ / #points
-    
-    -- Texto com informações da zona
-    local zoneName = zone.name or "Sem Nome"
-    local zoneGang = zone.gang_name or "Público"
-    local tableCount = 0
-    if drugTables[zone.zone_id] then
-        tableCount = #drugTables[zone.zone_id]
-    end
-    
-    local infoText = string.format("~b~Zona: ~w~%s\n~y~Gang: ~w~%s\n~g~Mesas: ~w~%d", zoneName, zoneGang, tableCount)
-    DrawText3D(centerX, centerY, centerZ + (thickness / 2), infoText)
-end
-
--- Função para desenhar mesas
-local function DrawTableDebug(tableData, zoneId)
-    if not tableData or not tableData.coords then
-        return
-    end
-    
-    local coords = tableData.coords
-    local color = Config.ZoneDebug.zoneColors.table
-    
-    -- Desenhar marcador na mesa
-    DrawMarker(1, coords.x, coords.y, coords.z, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 0.5, color.r, color.g, color.b, color.a, false, true, 2, false, nil, nil, false)
-    
-    -- Texto com ID da mesa
-    DrawText3D(coords.x, coords.y, coords.z + 1.0, string.format("~y~Mesa ID: ~w~%s", tableData.table_id or "N/A"))
-end
 
 -- Thread principal de debug
 CreateThread(function()

@@ -53,6 +53,8 @@ interface AppState {
 
     // Actions for NUI
     receiveNuiMessage: (data: any) => void;
+
+    upgradesConfig: any; // Store configuration for upgrades
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -69,6 +71,7 @@ export const useAppStore = create<AppState>((set) => ({
     isBoss: false,
     captureState: undefined,
     warAlert: undefined,
+    upgradesConfig: {},
 
     setOpen: (open) => set({ open }),
     setTab: (tab) => set({ tab }),
@@ -93,7 +96,8 @@ export const useAppStore = create<AppState>((set) => ({
                 activeWars: data.activeWars || {}, // Ensure activeWars is set on open
                 warRequests: data.warRequests || [], // Set warRequests on open
                 gangGrade: data.gangGrade || 0,
-                isBoss: !!data.isBoss
+                isBoss: !!data.isBoss,
+                upgradesConfig: data.upgradesConfig || {}
             });
         } else if (data.action === 'close') {
             set({ open: false });

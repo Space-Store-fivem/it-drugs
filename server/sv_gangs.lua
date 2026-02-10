@@ -1,4 +1,7 @@
 gangZones = {}
+gangMetadata = {}
+gangSprays = {}
+
 
 local function isPoliceJob(jobName)
     for _, job in ipairs(Config.PoliceJobs) do
@@ -107,15 +110,43 @@ local function loadGangZones()
     TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
 end
 
+local function loadGangMetadata()
+    local metadata = MySQL.query.await('SELECT * FROM it_gang_metadata')
+    if metadata then
+        for _, data in ipairs(metadata) do
+            gangMetadata[data.gang_id] = {
+                logo = data.logo_url
+            }
+        end
+    end
+    TriggerClientEvent('it-drugs:client:updateGangMetadata', -1, gangMetadata)
+end
+
+local function loadGangSprays()
+    local sprays = MySQL.query.await('SELECT * FROM it_gang_sprays')
+    if sprays then
+        gangSprays = sprays
+    end
+    TriggerClientEvent('it-drugs:client:updateGangSprays', -1, gangSprays)
+end
+
 CreateThread(function()
     Wait(1000)
     loadGangZones()
+    loadGangMetadata()
+    loadGangSprays()
 end)
+
 
 -- Callback to get zones
 lib.callback.register('it-drugs:server:getGangZones', function(source)
-    return gangZones
+    return {
+        zones = gangZones,
+        metadata = gangMetadata,
+        sprays = gangSprays
+    }
 end)
+
 
 -- NUI Callback: Open Panel
 local function getAllGangs()
@@ -213,8 +244,11 @@ RegisterNetEvent('it-drugs:server:openGangPanel', function()
             isAdmin = isPlayerAdmin, -- Mantenha admin real ou force false se quiser restringir policia admin
             availableGangs = availableGangs,
             gangGrade = playerGang.grade,
-            isBoss = playerGang.isBoss
+            isBoss = playerGang.isBoss,
+            gangLogo = gangMetadata[gangName] and gangMetadata[gangName].logo or nil,
+            gangMetadata = gangMetadata
         })
+
         
         -- Sincronizar solicitações de guerra para o jogador que abriu (Chamada Direta)
         if syncWarRequests then
@@ -482,3 +516,72 @@ RegisterNetEvent('it-drugs:server:guardDied', function(zoneId, upgradeUniqueId)
         TriggerClientEvent('it-drugs:client:updateGangZones', -1, gangZones)
     end
 end)
+
+-- LOGO & SPRAYS
+
+RegisterNetEvent('it-drugs:server:setGangLogo', function(url)
+    local src = source
+    local playerGang = getPlayerGang(src)
+    
+    if not playerGang or not playerGang.isBoss then
+        it.notify(src, 'Erro', 'error', 'Apenas o líder da gangue pode alterar o logo.')
+        return
+    end
+
+    local gangId = playerGang.name
+    
+    -- Basic URL validation (checking for image extension)
+    -- Em um ambiente real, seria bom verificar headers, mas aqui vamos confiar no básico
+    -- ou deixar o client validar visualmente.
+    
+    MySQL.insert('INSERT INTO it_gang_metadata (gang_id, logo_url) VALUES (?, ?) ON DUPLICATE KEY UPDATE logo_url = ?', {
+        gangId, url, url
+    })
+
+    if not gangMetadata[gangId] then gangMetadata[gangId] = {} end
+    gangMetadata[gangId].logo = url
+
+    TriggerClientEvent('it-drugs:client:updateGangMetadata', -1, gangMetadata)
+    it.notify(src, 'Sucesso', 'success', 'Logo da gangue atualizado!')
+end)
+
+-- Spray events removed as per user request
+
+-- Initial Load
+CreateThread(function()
+    loadGangZones()
+    
+    -- Load Metadata (Logos)
+    local meta = MySQL.query.await('SELECT * FROM it_gang_metadata')
+    if meta then
+        for _, m in ipairs(meta) do
+            if not gangMetadata[m.gang_id] then gangMetadata[m.gang_id] = {} end
+            gangMetadata[m.gang_id].logo = m.logo_url
+        end
+    end
+
+    -- Sprays removed
+end)
+
+function table_size(t)
+    local c = 0
+    for _ in pairs(t) do c = c + 1 end
+    return c
+end
+
+-- Sync on join
+-- Sync on join
+RegisterNetEvent('it-drugs:server:playerJoined', function()
+    local src = source
+    TriggerClientEvent('it-drugs:client:updateGangZones', src, gangZones)
+    TriggerClientEvent('it-drugs:client:updateGangMetadata', src, gangMetadata)
+end)
+
+-- Callback for client init
+lib.callback.register('it-drugs:server:getGangZones', function(source)
+    return {
+        zones = gangZones,
+        metadata = gangMetadata
+    }
+end)
+

@@ -22,6 +22,9 @@ interface AppState {
     warRequests: any[];
     gangGrade: number;
     isBoss: boolean;
+    gangLogo?: string;
+    gangMetadata: Record<string, { logo?: string }>;
+
     captureState?: {
         active: boolean;
         zoneId: string;
@@ -62,8 +65,10 @@ interface AppState {
 
     // Actions for NUI
     receiveNuiMessage: (data: any) => void;
+    setGangMetadata: (metadata: any) => void;
 
     upgradesConfig: any; // Store configuration for upgrades
+
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -81,8 +86,10 @@ export const useAppStore = create<AppState>((set) => ({
     captureState: undefined,
     warAlert: undefined,
     upgradesConfig: {},
+    gangMetadata: {},
 
     isVisualEditorOpen: false,
+
     visualEditorMode: 'create',
     pendingZoneData: null,
     editingZoneId: null,
@@ -98,8 +105,10 @@ export const useAppStore = create<AppState>((set) => ({
     setWarRequests: (warRequests) => set({ warRequests }), // Added setter implementation
     showWarAlert: (warAlert) => set({ warAlert }),
     hideWarAlert: () => set({ warAlert: undefined }),
+    setGangMetadata: (metadata) => set({ gangMetadata: metadata }),
 
     setVisualEditorOpen: (isVisualEditorOpen: boolean, mode: 'create' | 'edit' = 'create', data: any = null) => set({
+
         isVisualEditorOpen,
         visualEditorMode: mode,
         pendingZoneData: data,
@@ -119,8 +128,11 @@ export const useAppStore = create<AppState>((set) => ({
                 warRequests: data.warRequests || [], // Set warRequests on open
                 gangGrade: data.gangGrade || 0,
                 isBoss: !!data.isBoss,
-                upgradesConfig: data.upgradesConfig || {}
+                upgradesConfig: data.upgradesConfig || {},
+                gangLogo: data.gangLogo,
+                gangMetadata: data.gangMetadata || {}
             });
+
         } else if (data.action === 'close') {
             set({ open: false });
         } else if (data.action === 'updateZones') {
@@ -144,8 +156,16 @@ export const useAppStore = create<AppState>((set) => ({
             });
         } else if (data.action === 'captureUpdate') {
             set({ captureState: data.state });
+        } else if (data.action === 'updateGangMetadata') {
+            const metadata = data.metadata || {};
+            const currentGangName = useAppStore.getState().gangName;
+            set({ 
+                gangMetadata: metadata,
+                gangLogo: metadata[currentGangName]?.logo || undefined
+            });
         }
     }
+
 }));
 
 

@@ -59,7 +59,9 @@ client_scripts {
     'client/cl_drug_table.lua',
     'client/cl_gangs.lua',
     'client/cl_war.lua',
+    'client/cl_sprays.lua',
 }
+
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',

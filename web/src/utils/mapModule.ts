@@ -105,7 +105,8 @@ export const MapModule = {
         console.log("MapModule initialized (React Version)");
     },
 
-    loadMapData: (zones: any, currentGang: string, onZoneClick: (id: string) => void) => {
+    loadMapData: (zones: any, currentGang: string, metadata: any, onZoneClick: (id: string) => void) => {
+
         if (!map || !zones) return;
 
         mapLayers.forEach(layer => map.removeLayer(layer));
@@ -172,8 +173,33 @@ export const MapModule = {
                 });
 
                 mapLayers.push(polygon);
+                mapLayers.push(polygon);
+
+                // Add Logo if available
+                const owner = zone.owner_gang;
+                if (owner && metadata && metadata[owner] && metadata[owner].logo) {
+                    // Calculate Centroid
+                    let sumLat = 0, sumLng = 0;
+                    latlngs.forEach(p => { sumLat += p[0]; sumLng += p[1]; });
+                    const center = L.latLng(sumLat / latlngs.length, sumLng / latlngs.length);
+
+                    const logoIcon = L.icon({
+                        iconUrl: metadata[owner].logo,
+                        iconSize: [48, 48], // Size of the logo
+                        iconAnchor: [24, 24],
+                        className: 'gang-logo-marker filter drop-shadow-md'
+                    });
+
+                    const marker = L.marker(center, {
+                        icon: logoIcon,
+                        interactive: false // Click through to zone
+                    }).addTo(map);
+
+                    mapLayers.push(marker);
+                }
             }
         });
+
     },
 
     invalidateSize: () => {

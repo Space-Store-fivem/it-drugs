@@ -1,4 +1,7 @@
 gangZones = {} -- GLOBAL (Internal to resource scope) for access in cl_war.lua
+gangMetadata = {}
+gangSprays = {}
+
 local zonePolys = {}
 local spawnedGuards = {} -- Moved to top for scope visibility
 
@@ -13,6 +16,17 @@ RegisterNetEvent('it-drugs:client:updateGangZones', function(zones)
         zones = zones
     })
 end)
+
+RegisterNetEvent('it-drugs:client:updateGangMetadata', function(metadata)
+    gangMetadata = metadata
+    SendNUIMessage({
+        action = 'updateGangMetadata',
+        metadata = metadata
+    })
+end)
+
+-- gangSprays removed
+
 
 function refreshGangZones()
     -- cleanupAllGuards() -- DESATIVADO: Evitar resetar todos os NPCs a cada update
@@ -353,8 +367,11 @@ RegisterNetEvent('it-drugs:client:openGangUi', function(data)
         availableGangs = data.availableGangs,
         gangGrade = data.gangGrade,
         isBoss = data.isBoss,
-        upgradesConfig = sentUpgrades
+        upgradesConfig = sentUpgrades,
+        gangLogo = data.gangLogo,
+        gangMetadata = data.gangMetadata or gangMetadata
     })
+
 end)
 
 -- DEBUG COMMAND (Diagnosticar NPCs travados)
@@ -400,18 +417,20 @@ end)
 
 -- Initial Load
 CreateThread(function()
-    Wait(2000) -- Wait for server to register callback and player to load
+    Wait(1000)
+    -- Trigger initial sync
+    TriggerServerEvent('it-drugs:server:playerJoined')
+    
+    -- Also try callback for immediate load if available
     local success, result = pcall(function()
         return lib.callback.await('it-drugs:server:getGangZones', false)
     end)
     
     if success and result then
-        gangZones = result
-        refreshGangZones()
-    else
-        print('[IT-DRUGS] Falha ao carregar zonas via callback. Tentando novamente em 5s...')
-        Wait(5000)
-        gangZones = lib.callback.await('it-drugs:server:getGangZones', false)
+        gangZones = result.zones or {}
+        gangMetadata = result.metadata or {}
+        -- gangSprays = result.sprays or {}
+
         refreshGangZones()
     end
 end)

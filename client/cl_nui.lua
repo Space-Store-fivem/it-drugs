@@ -125,3 +125,12 @@ RegisterNUICallback('buyUpgrade', function(data, cb)
     TriggerServerEvent('it-drugs:server:buyUpgrade', data.zoneId, data.upgradeId)
     if cb then cb('ok') end
 end)
+
+RegisterNUICallback('setGangLogo', function(data, cb)
+    -- data = { url: string }
+    local url = data.url
+    if url and url ~= '' then
+        TriggerServerEvent('it-drugs:server:setGangLogo', url)
+    end
+    if cb then cb('ok') end
+end)

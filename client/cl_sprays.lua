@@ -1,0 +1,2 @@
+-- Sprays feature disabled by user request.
+-- File kept for potential future use or reference, but logic is removed.

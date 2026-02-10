@@ -12,6 +12,8 @@ function cn(...classes: (string | undefined | null | false)[]) {
 export default function App() {
     const { open, tab, gangName, isAdmin, isBoss, setTab, setOpen, receiveNuiMessage, isVisualEditorOpen } = useAppStore();
     const [showColorModal, setShowColorModal] = useState(false);
+    const [showLogoModal, setShowLogoModal] = useState(false);
+
 
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
@@ -55,15 +57,25 @@ export default function App() {
                                         Facção: <span className="text-purple-400">{gangName}</span>
                                     </p>
                                     {isBoss && (
-                                        <button
-                                            onClick={() => setShowColorModal(true)}
-                                            className="ml-2 p-1 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
-                                            title="Mudar Cor da Gangue"
-                                        >
-                                            <Settings className="w-3 h-3" />
-                                        </button>
+                                        <>
+                                            <button
+                                                onClick={() => setShowColorModal(true)}
+                                                className="ml-2 p-1 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+                                                title="Mudar Cor da Gangue"
+                                            >
+                                                <Settings className="w-3 h-3" />
+                                            </button>
+                                            <button
+                                                onClick={() => setShowLogoModal(true)}
+                                                className="ml-2 p-1 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
+                                                title="Mudar Logo da Gangue"
+                                            >
+                                                <Flag className="w-3 h-3" />
+                                            </button>
+                                        </>
                                     )}
                                 </div>
+
                             </div>
                             <button onClick={handleClose} className="w-8 h-8 rounded-full flex items-center justify-center hover:bg-white/10 transition-colors text-zinc-400 hover:text-white">
                                 <X className="w-5 h-5" />
@@ -127,9 +139,80 @@ export default function App() {
                     }}
                 />
             )}
+
+            {showLogoModal && (
+                <ChangeLogoModal
+                    onClose={() => setShowLogoModal(false)}
+                />
+            )}
         </>
     );
 }
+
+function ChangeLogoModal({ onClose }: { onClose: () => void }) {
+    const [url, setUrl] = useState('');
+    const { gangLogo } = useAppStore();
+
+    useEffect(() => {
+        if (gangLogo) setUrl(gangLogo);
+    }, [gangLogo]);
+
+    const handleSave = () => {
+        if (!url.trim()) return;
+        fetch('https://it-drugs/setGangLogo', {
+            method: 'POST',
+            body: JSON.stringify({ url: url.trim() })
+        });
+        onClose();
+    };
+
+    return (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/80 backdrop-blur-md p-4 animate-in fade-in duration-300">
+            <div className="w-full max-w-md glass-panel rounded-2xl overflow-hidden shadow-2xl animate-in zoom-in-95 duration-300 border border-white/10">
+                <div className="glass-header px-6 py-5 flex justify-between items-center bg-[#0a0a0f]/50">
+                    <div>
+                        <h2 className="text-xl font-bold text-white flex items-center gap-3 uppercase tracking-wider text-glow">
+                            <Flag className="w-5 h-5 text-purple-500" />
+                            Logo da Gangue
+                        </h2>
+                        <p className="text-xs text-zinc-400 font-mono tracking-widest mt-1 uppercase">Defina o URL da imagem (PNG)</p>
+                    </div>
+                    <button onClick={onClose} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-zinc-400 hover:text-white">
+                        <X className="w-5 h-5" />
+                    </button>
+                </div>
+
+                <div className="p-6 space-y-4">
+                    <div className="space-y-1">
+                        <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">URL da Imagem</label>
+                        <input
+                            type="text"
+                            className="w-full bg-black/40 border border-white/10 rounded-lg px-4 py-3 text-white text-sm focus:outline-none focus:border-purple-500 transition-colors placeholder:text-zinc-700"
+                            placeholder="https://i.imgur.com/example.png"
+                            value={url}
+                            onChange={(e) => setUrl(e.target.value)}
+                        />
+                    </div>
+
+                    {url && (
+                        <div className="flex justify-center p-4 bg-black/20 rounded-lg border border-white/5">
+                            <img src={url} alt="Preview" className="max-h-32 object-contain" onError={(e) => (e.currentTarget.style.display = 'none')} />
+                        </div>
+                    )}
+
+                    <button
+                        onClick={handleSave}
+                        className="w-full py-3 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-black uppercase tracking-widest transition-all shadow-lg hover:shadow-purple-500/25 active:scale-95 shine-effect"
+                    >
+                        Salvar Logo
+                    </button>
+                </div>
+            </div>
+        </div>
+    );
+}
+
+
 
 
 
@@ -466,7 +549,7 @@ function NavButton({ active, onClick, icon, label, className }: any) {
 }
 
 function GameMap() {
-    const { zones, gangName, setSelectedZoneId } = useAppStore();
+    const { zones, gangName, setSelectedZoneId, gangMetadata } = useAppStore();
 
     useEffect(() => {
         MapModule.initMap();
@@ -476,9 +559,10 @@ function GameMap() {
     }, []);
 
     useEffect(() => {
-        MapModule.loadMapData(zones, gangName, (id) => {
+        MapModule.loadMapData(zones, gangName, gangMetadata, (id) => {
             setSelectedZoneId(id);
         });
+
 
         // Ensure resize after mount
         const t = setTimeout(() => MapModule.invalidateSize(), 300);

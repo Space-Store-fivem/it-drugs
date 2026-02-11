@@ -232,8 +232,34 @@ end
 -- Inicializar ao iniciar o script
 CreateThread(function()
     Wait(1000) -- Aguardar o MySQL estar pronto
-    loadZones()
+    
+    -- Auto-Migration: Check for 'color' column in it_drug_zones
+    MySQL.query('SHOW COLUMNS FROM it_drug_zones LIKE "color"', {}, function(result)
+        if not result or #result == 0 then
+            print('^3[IT-DRUGS DATABASE] Adding missing "color" column to it_drug_zones...^7')
+            MySQL.query('ALTER TABLE it_drug_zones ADD COLUMN color VARCHAR(20) DEFAULT NULL COMMENT "Hex Color #RRGGBB"', {}, function(alterResult)
+                print('^2[IT-DRUGS DATABASE] Column "color" added successfully to it_drug_zones!^7')
+                checkGangZones()
+            end)
+        else
+            checkGangZones()
+        end
+    end)
 end)
+
+function checkGangZones()
+    MySQL.query('SHOW COLUMNS FROM it_gang_zones LIKE "color"', {}, function(result)
+        if not result or #result == 0 then
+            print('^3[IT-DRUGS DATABASE] Adding missing "color" column to it_gang_zones...^7')
+            MySQL.query('ALTER TABLE it_gang_zones ADD COLUMN color VARCHAR(20) DEFAULT NULL COMMENT "Hex Color #RRGGBB"', {}, function(alterResult)
+                print('^2[IT-DRUGS DATABASE] Column "color" added successfully to it_gang_zones!^7')
+                loadZones()
+            end)
+        else
+            loadZones()
+        end
+    end)
+end
 
 -- Comando /drugzone
 RegisterCommand('drugzone', function(source, args, rawCommand)

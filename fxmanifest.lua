@@ -60,8 +60,9 @@ client_scripts {
     'client/cl_gangs.lua',
     'client/cl_war.lua',
     'client/cl_sprays.lua',
-}
+    'client/cl_ranking.lua',
 
+}
 
 server_scripts {
     '@oxmysql/lib/MySQL.lua',
@@ -78,7 +79,9 @@ server_scripts {
     'server/database/sv_setupdatabase.lua',
     'server/sv_gangs.lua',
     'server/sv_war.lua',
+    'server/sv_ranking.lua',
 }
+
 
 dependencies {
     'ox_lib',

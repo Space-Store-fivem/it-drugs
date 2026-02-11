@@ -69,6 +69,14 @@ interface AppState {
 
     upgradesConfig: any; // Store configuration for upgrades
 
+    zoneNotification: {
+        show: boolean;
+        zoneName: string;
+        gangOwner: string;
+        type?: 'enter' | 'exit';
+        status?: 'friendly' | 'hostile' | 'neutral';
+    };
+    setZoneNotification: (data: any) => void;
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -88,13 +96,24 @@ export const useAppStore = create<AppState>((set) => ({
     upgradesConfig: {},
     gangMetadata: {},
 
+    zoneNotification: {
+        show: false,
+        zoneName: '',
+        gangOwner: '',
+        type: 'enter',
+        status: 'neutral'
+    },
+    setZoneNotification: (data) => set({ zoneNotification: data }),
+
     isVisualEditorOpen: false,
 
     visualEditorMode: 'create',
     pendingZoneData: null,
     editingZoneId: null,
 
-    setOpen: (open) => set({ open }),
+    // Zone Notification State
+
+    setOpen: (open: boolean) => set({ open }),
     setTab: (tab) => set({ tab }),
     setGangName: (gangName) => set({ gangName }),
     setIsAdmin: (isAdmin) => set({ isAdmin }),
@@ -159,9 +178,19 @@ export const useAppStore = create<AppState>((set) => ({
         } else if (data.action === 'updateGangMetadata') {
             const metadata = data.metadata || {};
             const currentGangName = useAppStore.getState().gangName;
-            set({ 
+            set({
                 gangMetadata: metadata,
                 gangLogo: metadata[currentGangName]?.logo || undefined
+            });
+        } else if (data.action === 'zoneNotification') {
+            set({
+                zoneNotification: {
+                    show: data.show,
+                    zoneName: data.zoneName,
+                    gangOwner: data.gangOwner,
+                    type: data.type || 'enter', // 'enter' | 'exit'
+                    status: data.status || 'neutral' // 'friendly' | 'hostile' | 'neutral'
+                }
             });
         }
     }

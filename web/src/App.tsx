@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useAppStore } from './store/useAppStore';
 import { MapModule } from './utils/mapModule';
-import { Map as MapIcon, Swords, Shield, X, Inbox, Flag, Settings, Clock, User, Check, Calendar } from 'lucide-react';
+import { Map as MapIcon, Swords, Shield, X, Inbox, Flag, Clock, User, Check, Calendar, Trophy, ChevronsUp, Settings } from 'lucide-react';
 import { CaptureProgress } from './components/CaptureProgress';
 import { WarAlerts } from './components/WarAlerts';
+import { RankingPanel } from './components/RankingPanel';
+
+import ZoneNotification from './components/ZoneNotification';
 
 function cn(...classes: (string | undefined | null | false)[]) {
     return classes.filter(Boolean).join(' ');
@@ -39,6 +42,7 @@ export default function App() {
         <>
             <CaptureProgress />
             <WarAlerts />
+            <ZoneNotification />
 
             {open && isVisualEditorOpen && <VisualEditor />}
 
@@ -58,13 +62,7 @@ export default function App() {
                                     </p>
                                     {isBoss && (
                                         <>
-                                            <button
-                                                onClick={() => setShowColorModal(true)}
-                                                className="ml-2 p-1 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
-                                                title="Mudar Cor da Gangue"
-                                            >
-                                                <Settings className="w-3 h-3" />
-                                            </button>
+
                                             <button
                                                 onClick={() => setShowLogoModal(true)}
                                                 className="ml-2 p-1 rounded-full bg-white/5 hover:bg-white/10 text-zinc-400 hover:text-white transition-colors"
@@ -98,6 +96,13 @@ export default function App() {
                                     icon={<Swords className="w-4 h-4" />}
                                     label="Zonas de Guerra"
                                 />
+                                <NavButton
+                                    active={tab === 'ranking'}
+                                    onClick={() => setTab('ranking')}
+                                    icon={<Trophy className="w-4 h-4" />}
+                                    label="Ranking"
+                                />
+
                                 {isAdmin && (
                                     <div className="mt-auto pt-4 border-t border-white/10">
                                         <NavButton
@@ -119,6 +124,8 @@ export default function App() {
                                 </div>
 
                                 {tab === 'wars' && <div className="absolute inset-0 z-10 bg-[#09090b]"><WarsPanel /></div>}
+                                {tab === 'ranking' && <div className="absolute inset-0 z-10 bg-[#09090b]"><RankingPanel /></div>}
+
                                 {tab === 'admin' && <div className="absolute inset-0 z-10 bg-[#09090b]"><AdminPanel /></div>}
                             </div>
                         </main>
@@ -257,7 +264,7 @@ function ZoneDetails() {
                         {canEdit && (
                             <>
                                 <button onClick={() => setShowShopModal(true)} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-purple-400 hover:text-white" title="Loja da Zona">
-                                    <Swords className="w-4 h-4" />
+                                    <ChevronsUp className="w-4 h-4" />
                                 </button>
                                 <button onClick={handleEditFlag} className="p-2 hover:bg-white/10 rounded-lg transition-colors text-zinc-400 hover:text-white" title="Editar Bandeira">
                                     <Flag className="w-4 h-4" />
@@ -296,21 +303,9 @@ function ZoneDetails() {
                         </div>
                     </div>
 
-                    {/* Stash Section (Mock) */}
-                    <div className="bg-[#151520]/90 rounded-xl overflow-hidden border border-white/5">
-                        <div className="px-4 py-3 border-b border-white/5 flex justify-between items-center cursor-pointer hover:bg-white/5 transition bg-white/[0.02]">
-                            <span className="text-xs font-bold text-zinc-300 uppercase tracking-wider">Stash Oculto</span>
-                            <span className="text-xs text-zinc-600">▼</span>
-                        </div>
-                        <div className="p-4">
-                            <div className="flex items-center gap-3 mb-4">
-                                <div className="p-2 bg-purple-500/10 rounded-lg text-purple-400 border border-purple-500/10"><Inbox className="w-4 h-4" /></div>
-                                <div>
-                                    <p className="text-[10px] text-zinc-500 uppercase font-bold">Estoque Estimado</p>
-                                    <p className="text-xs font-mono text-white tracking-wide">25kg Cocaína, 18 Rifles</p>
-                                </div>
-                            </div>
-                            {/* Actions */}
+                    {/* War Actions / Status */}
+                    {(!isMyZone && zone.owner_gang && !isWar) || isWar ? (
+                        <div className="bg-[#151520]/90 rounded-xl p-4 border border-white/5">
                             {!isMyZone && zone.owner_gang && !isWar && (
                                 <button
                                     onClick={handleOpenRequest}
@@ -327,21 +322,7 @@ function ZoneDetails() {
                                 </div>
                             )}
                         </div>
-                    </div>
-
-                    {/* Police Heat */}
-                    <div className="bg-gradient-to-r from-[#151520]/90 to-transparent rounded-xl p-3 border border-white/5 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                            <Shield className="w-4 h-4 text-orange-500 drop-shadow-[0_0_8px_rgba(249,115,22,0.5)]" />
-                            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">Heat Policial</span>
-                        </div>
-                        <div className="flex gap-1 items-end">
-                            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[6px] border-b-orange-500 drop-shadow-[0_0_5px_rgba(249,115,22,0.5)] opacity-50" />
-                            <div className="w-0 h-0 border-l-[4px] border-l-transparent border-r-[4px] border-r-transparent border-b-[6px] border-b-orange-500 drop-shadow-[0_0_5px_rgba(249,115,22,0.5)] opacity-75" />
-                            <div className="w-0 h-0 border-l-[5px] border-l-transparent border-r-[5px] border-r-transparent border-b-[8px] border-b-orange-500 drop-shadow-[0_0_8px_rgba(249,115,22,0.8)]" />
-                            <span className="text-xs font-black text-orange-500 ml-2 tracking-widest text-glow">ALTO</span>
-                        </div>
-                    </div>
+                    ) : null}
                 </div>
             </div>
 

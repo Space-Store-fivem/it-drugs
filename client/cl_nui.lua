@@ -59,12 +59,14 @@ RegisterNUICallback('saveGangZoneFinal', function(data, cb)
     end
     
     TriggerServerEvent('it-drugs:server:createGangZone', data.gangId, data.label, points, data.color, data.flag, data.visualZone)
+    SetNuiFocus(false, false)
     if cb then cb('ok') end
 end)
 
 RegisterNUICallback('saveVisualZone', function(data, cb)
     -- data = { zoneId, visualZone }
     TriggerServerEvent('it-drugs:server:updateGangVisual', data.zoneId, data.visualZone)
+    SetNuiFocus(false, false)
     if cb then cb('ok') end
 end)
 

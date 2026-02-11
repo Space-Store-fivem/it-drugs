@@ -184,36 +184,11 @@ local function loadZones()
     end
     tableObjects = {}
     
-    -- Criar zonas
+    -- Criar zonas (apenas estrutura de dados, o loop principal gerencia a detecção)
+    -- Isso substitui o uso do lib.zones.poly que estava falhando devido a erro no ox_lib
+    zoneObjects = {}
     for zoneId, zone in pairs(drugZones) do
-        if zone.polygon_points and #zone.polygon_points >= 3 then
-            local coords = {}
-            for _, point in ipairs(zone.polygon_points) do
-                table.insert(coords, vector3(point.x, point.y, point.z))
-            end
-            
-            zoneObjects[zoneId] = lib.zones.poly({
-                points = coords,
-                thickness = zone.thickness or 10.0,
-                debug = Config.DebugPoly,
-                onEnter = function(self)
-                    if Config.Debug then print("Entered Drug Zone ["..zoneId.."]") end
-                    currentEditingZone = zoneId
-                    -- Sempre criar target para zonas dinâmicas
-                    if Config.EnableSelling then
-                        CreateSellTarget()
-                    end
-                end,
-                onExit = function(self)
-                    if Config.Debug then print("Exited Drug Zone ["..zoneId.."]") end
-                    currentEditingZone = nil
-                    -- Desativar sistema de venda
-                    if Config.EnableSelling then
-                        RemoveSellTarget()
-                    end
-                end
-            })
-        end
+        zoneObjects[zoneId] = zone
     end
     
     -- Criar mesas de venda (Config)
@@ -1413,6 +1388,45 @@ end, false)
 exports('DebugLog', DebugLog)
 exports('IsDebugMode', function() return debugMode end)
 
+-- Helper Function: Check if point is inside polygon (Ray Casting Algorithm)
+local function isPointInZone(coords, zone)
+    if not zone or not zone.polygon_points then return false end
+    
+    local x, y, z = coords.x, coords.y, coords.z
+    local points = zone.polygon_points
+    local inside = false
+    local j = #points
+    
+    -- Check XY polygon
+    for i = 1, #points do
+        local pi = points[i]
+        local pj = points[j]
+        
+        if ((pi.y > y) ~= (pj.y > y)) and (x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y) + pi.x) then
+            inside = not inside
+        end
+        j = i
+    end
+    
+    -- Check Z height if inside polygon
+    if inside then
+        local minZ = points[1].z
+        for i = 2, #points do
+            if points[i].z < minZ then minZ = points[i].z end
+        end
+        
+        local thickness = zone.thickness or 10.0
+        local maxZ = minZ + thickness
+        
+        -- Optional: Expanded check for z-fighting or slight offset
+        if z < (minZ - 2.0) or z > (maxZ + 2.0) then
+            inside = false
+        end
+    end
+    
+    return inside
+end
+
 -- Inicializar ao carregar
 CreateThread(function()
     Wait(2000) -- Aguardar o servidor estar pronto
@@ -1420,10 +1434,97 @@ CreateThread(function()
     Wait(1000) -- Aguardar zonas carregarem
     cleanupOrphanTables() -- Limpar props órfãos após carregar
     
+    -- Debug para verificar carregamento
+    local zoneCount = 0
+    if drugZones then for _ in pairs(drugZones) do zoneCount = zoneCount + 1 end end
+    print('^2[IT-DRUGS DETECTION]^7 Sistema iniciado. Zonas carregadas: ' .. zoneCount)
+    
     -- Verificar se debug deve estar ativo por padrão
     if Config.ZoneDebug.enabled then
         debugMode = true
         DebugLog("Modo Debug ativado por padrão na config", "INFO")
+    end
+
+    -- Loop Manual de Detecção e Notificação NUI
+    -- Este loop roda separado do polyzone para gerenciar a UI React
+    while true do
+        local sleep = 1000
+        local playerPed = PlayerPedId()
+        local coords = GetEntityCoords(playerPed)
+        
+        -- Otimização: Apenas verificar se houver zonas carregadas
+        local foundZone = nil
+        
+        if drugZones then
+            for zoneId, zone in pairs(drugZones) do
+                -- Checagem básica de distância antes de polígono complexo (Raio de 150m do primeiro ponto)
+                if zone.polygon_points and zone.polygon_points[1] then
+                    local firstPoint = zone.polygon_points[1]
+                    local dist = #(coords - vector3(firstPoint.x, firstPoint.y, firstPoint.z))
+                    
+                    if dist < 150.0 then
+                        sleep = 200 -- Aumentar frequência quando perto de possível zona
+                        
+                        local inside = isPointInZone(coords, zone)
+                        if inside then
+                            if Config.Debug then print('^2[IT-DRUGS CHECK]^7 INSIDE ZONE: ' .. tostring(zoneId)) end
+                            foundZone = zoneId
+                            break -- Encontrou uma
+                        else
+                            if dist < 50.0 and Config.Debug then
+                                print('^3[IT-DRUGS CHECK]^7 NEAR ZONE: ' .. tostring(zoneId) .. ' Dist: ' .. math.floor(dist) .. 'm')
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        
+        -- Lógica de Entrada/Saída para UI
+            -- Lógica de Entrada/Saída para UI
+            if foundZone ~= currentEditingZone then
+                -- SAÍDA da zona anterior
+                if currentEditingZone then
+                    if Config.Debug then print("Exited Drug Zone ["..tostring(currentEditingZone).."] (NUI Trigger)") end
+                    
+                    -- Enviar evento NUI para fechar notificação (DESATIVADO PARA DRUG ZONES)
+                    -- SendNUIMessage({
+                    --     action = 'zoneNotification',
+                    --     show = false,
+                    --     zoneName = '',
+                    --     gangOwner = ''
+                    -- })
+                    
+                    -- Trigger legacy events for selling/gangs
+                    TriggerEvent('it-drugs:client:exitGangZone', currentEditingZone)
+                    currentZone = nil -- For selling logic
+                end
+                
+                -- ENTRADA na nova zona
+                if foundZone then
+                    if Config.Debug then print("Entered Drug Zone ["..tostring(foundZone).."] (NUI Trigger)") end
+                    
+                    local zone = drugZones[foundZone]
+                    local gangOwner = zone.gang_name or "Ninguém"
+                    local zoneLabel = zone.label or zone.name or "Zona Desconhecida"
+                    
+                    -- Enviar evento NUI para mostrar notificação (DESATIVADO PARA DRUG ZONES)
+                    -- SendNUIMessage({
+                    --     action = 'zoneNotification',
+                    --     show = true,
+                    --     zoneName = zoneLabel,
+                    --     gangOwner = gangOwner
+                    -- })
+                    
+                    -- Trigger legacy events for selling/gangs
+                    TriggerEvent('it-drugs:client:enterGangZone', foundZone)
+                    currentZone = foundZone -- For selling logic
+                end
+                
+                currentEditingZone = foundZone
+            end
+        
+        Wait(sleep)
     end
 end)
 

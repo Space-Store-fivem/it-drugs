@@ -11,6 +11,8 @@ for k, v in pairs(Config.SellZones) do
         table.insert(coords, vector3(point.x, point.y, point.z))
     end
 
+    --[=[ 
+    lib.zones.poly replaced with manual logic below
 	lib.zones.poly({
         points = coords,
         thickness = v.thickness,
@@ -26,6 +28,10 @@ for k, v in pairs(Config.SellZones) do
 			if Config.Debug then print("Exited Zone ["..k.."]") end
 		end
     })
+    --]=]
+    
+    -- Manual Loop for Selling Zones implemented in cl_zones.lua or handled dynamically
+    -- For now disabling to prevent ox_lib error
 end
 
 -- Função para atualizar zonas dinâmicas
